@@ -3,18 +3,25 @@ Calendario de Disponibilidade de Aeronaves - REVO
 Layout com visualizacao Gantt detalhada por dia
 """
 
-from flask import Flask, render_template_string, jsonify
+from flask import Flask, render_template_string, jsonify, request
 import os
+import time
 from datetime import datetime, timedelta
 from simple_salesforce import Salesforce
 import logging
 import calendar
 from math import radians, cos, sin, asin, sqrt
 import json
+import threading
 
 app = Flask(__name__)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# ===== CACHE =====
+_cache = {'data': None, 'stats': None, 'timestamp': 0, 'raw_json': None}
+_cache_lock = threading.Lock()
+CACHE_TTL = 120  # 2 minutos
 
 HELICOPTEROS = {
     'PR-OMB': {'modelo': 'EC155', 'cor': '#3B82F6', 'velocidade_kmh': 259.28},
@@ -144,8 +151,6 @@ def processar_voos(voos):
         'total_retornos': 0,
         'por_aeronave': {'PR-OMB': 0, 'PR-OMH': 0, 'PR-OOE': 0},
         'total_horas': 0.0,
-        'receita_total': 0.0,
-        'custo_operacional': 0.0,
         'total_shuttle': 0,
         'total_charter': 0
     }
@@ -236,14 +241,6 @@ def processar_voos(voos):
         if voo_info.get('retorno_info'):
             ret_dur = voo_info['retorno_info']['duracao_min'] / 60.0
             stats['total_horas'] += ret_dur
-        
-        receita_voo = float(voo.get('ReceitaVoo__c', 0) or 0) or float(voo.get('PerspectivaReceitaVoo__c', 0) or 0)
-        stats['receita_total'] += receita_voo
-        
-        custo_hora = 8000 if HELICOPTEROS[prefixo]['modelo'] == 'EC155' else 5500
-        stats['custo_operacional'] += duracao_estimada * custo_hora
-        if voo_info.get('retorno_info'):
-            stats['custo_operacional'] += ret_dur * custo_hora
     
     for data in voos_por_dia:
         voos_por_dia[data].sort(key=lambda x: x['inicio'])
@@ -282,22 +279,74 @@ HTML_TEMPLATE = '''
         .legend-item.retorno { border: 2px dashed #eab308; background: transparent; }
         
         .stats-grid {
-            display: grid; grid-template-columns: repeat(5, 1fr); gap: 15px;
-            margin-bottom: 15px;
-        }
-        .stats-grid2 {
-            display: grid; grid-template-columns: repeat(5, 1fr); gap: 15px;
-            margin-bottom: 30px;
+            display: grid; grid-template-columns: repeat(7, 1fr); gap: 15px;
+            margin-bottom: 20px;
         }
         .stat-card {
-            background: #1e293b; border-radius: 12px; padding: 20px; text-align: center;
+            background: #1e293b; border-radius: 12px; padding: 16px; text-align: center;
             border: 1px solid #334155;
         }
-        .stat-number { font-size: 2.5rem; font-weight: 700; margin-bottom: 5px; }
-        .stat-label { font-size: 0.85rem; color: #94a3b8; }
+        .stat-number { font-size: 2.2rem; font-weight: 700; margin-bottom: 5px; }
+        .stat-label { font-size: 0.8rem; color: #94a3b8; }
         .stat-card.blue .stat-number { color: #3B82F6; }
         .stat-card.green .stat-number { color: #10B981; }
         .stat-card.orange .stat-number { color: #F59E0B; }
+        
+        /* ===== FILTROS ===== */
+        .filters-bar {
+            display: flex; align-items: center; gap: 10px; margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .filter-btn {
+            background: #334155; border: 2px solid #475569; color: #94a3b8;
+            padding: 6px 16px; border-radius: 20px; cursor: pointer;
+            font-size: 0.85rem; font-weight: 500; transition: all 0.2s;
+        }
+        .filter-btn:hover { background: #475569; color: #e2e8f0; }
+        .filter-btn.active { background: #1e40af; border-color: #3b82f6; color: white; }
+        .filter-btn.active-green { background: #065f46; border-color: #10b981; color: white; }
+        .filter-btn.active-orange { background: #78350f; border-color: #f59e0b; color: white; }
+        .filter-btn.active-blue { background: #1e3a5f; border-color: #3b82f6; color: white; }
+        .filter-label { color: #64748b; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+        .filter-separator { width: 1px; height: 24px; background: #475569; }
+        
+        /* ===== PROXIMOS VOOS ===== */
+        .next-flights {
+            background: #1e293b; border-radius: 16px; padding: 20px; margin-bottom: 20px;
+            border: 1px solid #334155;
+        }
+        .next-flights-title {
+            font-size: 1rem; font-weight: 700; color: #94a3b8; margin-bottom: 15px;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .next-flights-title .pulse { display: inline-block; width: 8px; height: 8px; background: #22c55e; border-radius: 50%; animation: pulse 2s infinite; }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+        .next-flights-grid { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 5px; }
+        .nf-card {
+            background: #0f172a; border-radius: 10px; padding: 14px; min-width: 220px; flex-shrink: 0;
+            border-left: 3px solid #475569; transition: all 0.2s; cursor: pointer;
+        }
+        .nf-card:hover { background: #1e3a5f; transform: translateY(-2px); }
+        .nf-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .nf-date { font-size: 0.75rem; color: #64748b; }
+        .nf-prefix { font-weight: 700; font-size: 0.9rem; }
+        .nf-route { font-size: 0.85rem; color: #e2e8f0; margin-bottom: 4px; }
+        .nf-time { font-size: 0.8rem; color: #94a3b8; }
+        .nf-badge { font-size: 0.65rem; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+        .nf-badge.shuttle { background: #7c3aed; color: white; }
+        .nf-badge.charter { background: #0369a1; color: white; }
+        
+        /* ===== AUTO-REFRESH INDICATOR ===== */
+        .refresh-bar {
+            display: flex; align-items: center; gap: 10px; justify-content: center;
+            margin-bottom: 10px;
+        }
+        .refresh-indicator {
+            font-size: 0.75rem; color: #475569; display: flex; align-items: center; gap: 6px;
+        }
+        .refresh-spinner { display: none; width: 14px; height: 14px; border: 2px solid #475569; border-top: 2px solid #3b82f6; border-radius: 50%; animation: spin 1s linear infinite; }
+        .refresh-spinner.active { display: inline-block; }
+        @keyframes spin { to { transform: rotate(360deg); } }
         
         .calendar-wrapper { background: #1e293b; border-radius: 16px; padding: 20px; }
         
@@ -515,6 +564,10 @@ HTML_TEMPLATE = '''
                 <div class="stat-number" style="color: #eab308;">{{ stats.total_retornos }}</div>
                 <div class="stat-label">Retornos Estimados</div>
             </div>
+            <div class="stat-card">
+                <div class="stat-number" style="color: #38bdf8;">{{ "%.1f"|format(stats.total_horas) }}h</div>
+                <div class="stat-label">Horas de Voo</div>
+            </div>
             <div class="stat-card blue">
                 <div class="stat-number">{{ stats.por_aeronave['PR-OMB'] }}</div>
                 <div class="stat-label">PR-OMB</div>
@@ -527,35 +580,46 @@ HTML_TEMPLATE = '''
                 <div class="stat-number">{{ stats.por_aeronave['PR-OOE'] }}</div>
                 <div class="stat-label">PR-OOE</div>
             </div>
+            <div class="stat-card">
+                <div class="stat-number" style="color: #a78bfa;">{{ stats.total_shuttle }}<span style="color:#64748b;font-size:1.2rem;"> / </span><span style="color:#60a5fa;">{{ stats.total_charter }}</span></div>
+                <div class="stat-label">Shuttle / Charter</div>
+            </div>
         </div>
         
-        <div class="stats-grid2">
-            <div class="stat-card">
-                <div class="stat-number" style="color: #38bdf8;">{{ "%.1f"|format(stats.total_horas) }}h</div>
-                <div class="stat-label">Horas de Voo Reservadas</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number" style="color: #22c55e; font-size: 1.8rem;">R$ {{ "{:,.0f}".format(stats.receita_total).replace(",", ".") }}</div>
-                <div class="stat-label">Receita Projetada</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number" style="color: #ef4444; font-size: 1.8rem;">R$ {{ "{:,.0f}".format(stats.custo_operacional).replace(",", ".") }}</div>
-                <div class="stat-label">Custo Operacional</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number" style="color: #a78bfa;">{{ stats.total_shuttle }}</div>
-                <div class="stat-label">Shuttles</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number" style="color: #60a5fa;">{{ stats.total_charter }}</div>
-                <div class="stat-label">Charters</div>
+        <!-- Proximos Voos -->
+        <div class="next-flights" id="next-flights-panel">
+            <div class="next-flights-title"><span class="pulse"></span> Proximos Voos</div>
+            <div class="next-flights-grid" id="next-flights-grid"></div>
+        </div>
+        
+        <!-- Filtros -->
+        <div class="filters-bar" id="filters-bar">
+            <span class="filter-label">Filtrar:</span>
+            <button class="filter-btn active" data-filter="all" onclick="toggleFilter('all')">Todos</button>
+            <div class="filter-separator"></div>
+            <button class="filter-btn" data-filter="PR-OMB" onclick="toggleFilter('PR-OMB')" style="border-color:#3B82F6;">PR-OMB</button>
+            <button class="filter-btn" data-filter="PR-OMH" onclick="toggleFilter('PR-OMH')" style="border-color:#10B981;">PR-OMH</button>
+            <button class="filter-btn" data-filter="PR-OOE" onclick="toggleFilter('PR-OOE')" style="border-color:#F59E0B;">PR-OOE</button>
+            <div class="filter-separator"></div>
+            <button class="filter-btn" data-filter="shuttle" onclick="toggleFilter('shuttle')">Shuttle</button>
+            <button class="filter-btn" data-filter="charter" onclick="toggleFilter('charter')">Charter</button>
+        </div>
+        
+        <!-- Refresh bar -->
+        <div class="refresh-bar">
+            <div class="refresh-indicator">
+                <div class="refresh-spinner" id="refresh-spinner"></div>
+                <span id="refresh-text">Atualizado em {{ data_atualizacao }}</span>
             </div>
         </div>
         
         <div class="calendar-wrapper">
             <div class="month-nav">
                 <button class="nav-btn" onclick="mudarMes(-1)">&larr; Anterior</button>
-                <div class="month-title" id="month-title"></div>
+                <div style="display:flex;align-items:center;gap:12px;">
+                    <div class="month-title" id="month-title"></div>
+                    <button class="nav-btn" onclick="irParaHoje()" style="background:#F59E0B;color:#000;font-weight:600;">Hoje</button>
+                </div>
                 <button class="nav-btn" onclick="mudarMes(1)">Proximo &rarr;</button>
             </div>
             
@@ -577,9 +641,13 @@ HTML_TEMPLATE = '''
     <div class="modal-overlay" id="day-modal">
         <div class="modal-container">
             <div class="modal-header">
-                <div>
-                    <div class="modal-title" id="modal-day-title"></div>
-                    <div class="modal-subtitle" id="modal-day-subtitle"></div>
+                <div style="display:flex;align-items:center;gap:15px;">
+                    <button class="nav-btn" onclick="navegarDia(-1)" style="padding:8px 12px;" title="Dia anterior (←)">&larr;</button>
+                    <div>
+                        <div class="modal-title" id="modal-day-title"></div>
+                        <div class="modal-subtitle" id="modal-day-subtitle"></div>
+                    </div>
+                    <button class="nav-btn" onclick="navegarDia(1)" style="padding:8px 12px;" title="Proximo dia (→)">&rarr;</button>
                 </div>
                 <button class="modal-close" onclick="fecharModal()">&times;</button>
             </div>
@@ -600,13 +668,15 @@ HTML_TEMPLATE = '''
     </div>
     
     <script>
-        const voosPorDia = {{ voos_json|safe }};
+        let voosPorDia = {{ voos_json|safe }};
         const helicopteros = {{ helicopteros_json|safe }};
         const icons = {{ icons_json|safe }};
         
         let mesAtual = new Date().getMonth();
         let anoAtual = new Date().getFullYear();
         const hoje = new Date();
+        let activeFilter = 'all';
+        let currentModalDate = null;
         
         const mesesNome = ['Janeiro', 'Fevereiro', 'Marco', 'Abril', 'Maio', 'Junho',
                           'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
@@ -614,6 +684,77 @@ HTML_TEMPLATE = '''
         const diasSemana = ['Domingo', 'Segunda-feira', 'Terca-feira', 'Quarta-feira', 
                            'Quinta-feira', 'Sexta-feira', 'Sabado'];
         
+        // ===== FILTROS =====
+        function matchesFilter(voo) {
+            if (activeFilter === 'all') return true;
+            if (activeFilter === 'shuttle') return (voo.tipo || '').toLowerCase().includes('shuttle');
+            if (activeFilter === 'charter') return !(voo.tipo || '').toLowerCase().includes('shuttle');
+            return voo.prefixo === activeFilter;
+        }
+        
+        function toggleFilter(filter) {
+            activeFilter = filter;
+            document.querySelectorAll('.filter-btn').forEach(b => {
+                b.classList.remove('active', 'active-blue', 'active-green', 'active-orange');
+            });
+            const btn = document.querySelector(`[data-filter="${filter}"]`);
+            if (filter === 'PR-OMB') btn.classList.add('active-blue');
+            else if (filter === 'PR-OMH') btn.classList.add('active-green');
+            else if (filter === 'PR-OOE') btn.classList.add('active-orange');
+            else btn.classList.add('active');
+            renderCalendario();
+            renderProximosVoos();
+        }
+        
+        // ===== PROXIMOS VOOS =====
+        function renderProximosVoos() {
+            const grid = document.getElementById('next-flights-grid');
+            const now = new Date();
+            const allVoos = [];
+            
+            Object.entries(voosPorDia).forEach(([data, voos]) => {
+                voos.filter(v => !v.is_retorno && matchesFilter(v)).forEach(v => {
+                    const dt = new Date(v.inicio);
+                    if (dt >= new Date(now.getFullYear(), now.getMonth(), now.getDate())) {
+                        allVoos.push({...v, _date: data, _dt: dt});
+                    }
+                });
+            });
+            
+            allVoos.sort((a, b) => a._dt - b._dt);
+            const proximos = allVoos.slice(0, 8);
+            
+            if (proximos.length === 0) {
+                grid.innerHTML = '<div style="color:#64748b;padding:20px;">Nenhum voo futuro encontrado</div>';
+                return;
+            }
+            
+            grid.innerHTML = proximos.map(voo => {
+                const cor = helicopteros[voo.prefixo]?.cor || '#666';
+                const hora = voo._dt.toTimeString().slice(0, 5);
+                const dataObj = voo._dt;
+                const isHoje = dataObj.toDateString() === now.toDateString();
+                const amanha = new Date(now); amanha.setDate(amanha.getDate() + 1);
+                const isAmanha = dataObj.toDateString() === amanha.toDateString();
+                const dataLabel = isHoje ? 'HOJE' : isAmanha ? 'AMANHA' : `${dataObj.getDate()}/${dataObj.getMonth()+1}`;
+                const tipoLower = (voo.tipo || '').toLowerCase();
+                const badge = tipoLower.includes('shuttle') 
+                    ? '<span class="nf-badge shuttle">SHUTTLE</span>' 
+                    : '<span class="nf-badge charter">CHARTER</span>';
+                
+                return `
+                <div class="nf-card" style="border-left-color:${cor};" onclick="abrirModal('${voo._date}')">
+                    <div class="nf-header">
+                        <span class="nf-prefix" style="color:${cor};">${voo.prefixo}</span>
+                        <span class="nf-date" style="${isHoje ? 'color:#22c55e;font-weight:700;' : ''}">${dataLabel}</span>
+                    </div>
+                    <div class="nf-route">${voo.origem_nome} → ${voo.destino_nome}</div>
+                    <div class="nf-time">${hora} · ${voo.duracao_min}min · ${voo.passageiros} pax ${badge}</div>
+                </div>`;
+            }).join('');
+        }
+        
+        // ===== CALENDARIO =====
         function renderCalendario() {
             const grid = document.getElementById('calendar-grid');
             const titulo = document.getElementById('month-title');
@@ -633,7 +774,7 @@ HTML_TEMPLATE = '''
             
             for (let dia = 1; dia <= diasNoMes; dia++) {
                 const dataStr = `${anoAtual}-${String(mesAtual + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
-                const voosDia = voosPorDia[dataStr] || [];
+                const voosDia = (voosPorDia[dataStr] || []).filter(v => matchesFilter(v));
                 
                 const isHoje = (dia === hoje.getDate() && mesAtual === hoje.getMonth() && anoAtual === hoje.getFullYear());
                 const classeHoje = isHoje ? ' today' : '';
@@ -659,7 +800,7 @@ HTML_TEMPLATE = '''
                         <div class="flight-tooltip">
                             <strong>${voo.prefixo}</strong><br>
                             ${voo.origem_nome} → ${voo.destino_nome}<br>
-                            ${hora} - ${durMin}min
+                            ${hora} - ${durMin}min · ${voo.passageiros} pax
                             ${voo.retorno_info ? '<br><span style="color:#eab308;">+ Retorno estimado</span>' : ''}
                         </div>
                     </div>`;
@@ -669,7 +810,6 @@ HTML_TEMPLATE = '''
                     html += `<div style="text-align:center;color:#64748b;font-size:0.7rem;">+${voosReais.length - 6} mais</div>`;
                 }
                 
-                // Day tooltip (quick snapshot)
                 if (voosReais.length > 0) {
                     const aeronaves = {};
                     voosReais.forEach(v => {
@@ -681,8 +821,6 @@ HTML_TEMPLATE = '''
                         const cor = helicopteros[pref]?.cor || '#fff';
                         snap += `<span style="color:${cor};">${pref}: ${count}</span><br>`;
                     });
-                    const recDia = voosReais.reduce((s, v) => s + (v.receita || 0), 0);
-                    if (recDia > 0) snap += `<span style="color:#22c55e;">R$ ${recDia.toLocaleString('pt-BR', {maximumFractionDigits:0})}</span>`;
                     snap += '</div>';
                     html += snap;
                 }
@@ -700,8 +838,16 @@ HTML_TEMPLATE = '''
             renderCalendario();
         }
         
+        function irParaHoje() {
+            mesAtual = hoje.getMonth();
+            anoAtual = hoje.getFullYear();
+            renderCalendario();
+        }
+        
+        // ===== MODAL COM NAVEGACAO =====
         function abrirModal(dataStr) {
-            const voos = voosPorDia[dataStr] || [];
+            currentModalDate = dataStr;
+            const voos = (voosPorDia[dataStr] || []).filter(v => matchesFilter(v));
             const modal = document.getElementById('day-modal');
             const titulo = document.getElementById('modal-day-title');
             const subtitulo = document.getElementById('modal-day-subtitle');
@@ -721,14 +867,12 @@ HTML_TEMPLATE = '''
             } else {
                 let html = '';
                 
-                // Timeline header
                 html += '<div class="timeline-header"><div class="timeline-hours">';
                 for (let h = 5; h <= 23; h++) {
                     html += `<div class="timeline-hour">${String(h).padStart(2, '0')}:00</div>`;
                 }
                 html += '</div></div>';
                 
-                // Gantt rows
                 voos.forEach(voo => {
                     const cor = helicopteros[voo.prefixo]?.cor || '#666';
                     const icon = icons[voo.prefixo] || '';
@@ -751,16 +895,12 @@ HTML_TEMPLATE = '''
                         tipoTag = `<span class="gantt-tipo-tag other">${voo.tipo.toUpperCase()}</span>`;
                     }
                     
-                    const receita = voo.receita ? `R$ ${voo.receita.toLocaleString('pt-BR')}` : '-';
-                    
-                    // Calculate bar positions (5h = 0%, 23h = 100%, 18h range)
                     const startHour = inicio.getHours() + inicio.getMinutes() / 60;
                     const endHour = fim.getHours() + fim.getMinutes() / 60;
                     const leftPercent = Math.max(0, ((startHour - 5) / 18) * 100);
                     const vooEndPercent = Math.max(0, ((endHour - 5) / 18) * 100);
                     const rawWidth = vooEndPercent - leftPercent;
                     const vooWidth = Math.max(rawWidth, 3);
-                    // Posicao visual real onde a barra vermelha termina
                     const vooVisualEnd = leftPercent + vooWidth;
                     
                     let retornoBar = '';
@@ -768,14 +908,11 @@ HTML_TEMPLATE = '''
                         const retFim = new Date(voo.retorno_info.fim);
                         const retEndHour = retFim.getHours() + retFim.getMinutes() / 60;
                         const retEndPercent = Math.min(100, ((retEndHour - 5) / 18) * 100);
-                        // Retorno comeca EXATAMENTE onde a barra vermelha termina visualmente
                         const retLeftPercent = vooVisualEnd;
                         const retWidthPercent = Math.max(retEndPercent - retLeftPercent, 2);
                         
                         if (retEndPercent > retLeftPercent) {
-                            retornoBar = `
-                                <div class="gantt-bar retorno" style="left: ${retLeftPercent}%; width: ${retWidthPercent}%;">
-                                </div>`;
+                            retornoBar = `<div class="gantt-bar retorno" style="left: ${retLeftPercent}%; width: ${retWidthPercent}%;"></div>`;
                         }
                     }
                     
@@ -792,20 +929,20 @@ HTML_TEMPLATE = '''
                                 </div>
                             </div>
                             <div class="gantt-info-details">
-                                P: <span>${voo.passageiros}</span><br>
-                                ${horaInicio}-${horaFim}, <span>${voo.duracao_min}min</span> - Receita: <span>${receita}</span>
+                                Pax: <span>${voo.passageiros}</span> · 
+                                <span>${horaInicio} - ${horaFim}</span> · 
+                                <span>${voo.duracao_min}min</span>
                             </div>
                             <div class="gantt-info-rota">
-                                <strong>${voo.origem_nome}</strong> (${voo.origem}), ${horaInicio}<br>
-                                <strong>${voo.destino_nome}</strong> (${voo.destino}), ${horaFim}
+                                <strong>${voo.origem_nome}</strong> (${voo.origem})<br>
+                                ↓ <strong>${voo.destino_nome}</strong> (${voo.destino})
                             </div>
                         </div>
                         <div class="gantt-timeline">
                             <div class="gantt-grid-lines">
                                 ${Array(18).fill('<div class="gantt-grid-line"></div>').join('')}
                             </div>
-                            <div class="gantt-bar voo" style="left: ${leftPercent}%; width: ${vooWidth}%;">
-                            </div>
+                            <div class="gantt-bar voo" style="left: ${leftPercent}%; width: ${vooWidth}%;"></div>
                             ${retornoBar}
                         </div>
                     </div>`;
@@ -818,9 +955,18 @@ HTML_TEMPLATE = '''
             document.body.style.overflow = 'hidden';
         }
         
+        function navegarDia(delta) {
+            if (!currentModalDate) return;
+            const d = new Date(currentModalDate + 'T12:00:00');
+            d.setDate(d.getDate() + delta);
+            const newDate = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+            abrirModal(newDate);
+        }
+        
         function fecharModal() {
             document.getElementById('day-modal').classList.remove('active');
             document.body.style.overflow = '';
+            currentModalDate = null;
         }
         
         document.getElementById('day-modal').addEventListener('click', function(e) {
@@ -829,33 +975,48 @@ HTML_TEMPLATE = '''
         
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') fecharModal();
+            if (currentModalDate) {
+                if (e.key === 'ArrowLeft') navegarDia(-1);
+                if (e.key === 'ArrowRight') navegarDia(1);
+            }
         });
         
-        document.addEventListener('DOMContentLoaded', renderCalendario);
+        // ===== AUTO-REFRESH =====
+        async function autoRefresh() {
+            try {
+                const spinner = document.getElementById('refresh-spinner');
+                const text = document.getElementById('refresh-text');
+                spinner.classList.add('active');
+                
+                const resp = await fetch('/api/voos');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    voosPorDia = data.voos;
+                    renderCalendario();
+                    renderProximosVoos();
+                    text.textContent = `Atualizado em ${data.atualizado_em}`;
+                }
+                spinner.classList.remove('active');
+            } catch(e) {
+                document.getElementById('refresh-spinner').classList.remove('active');
+            }
+        }
+        
+        // Refresh a cada 2 min
+        setInterval(autoRefresh, 120000);
+        
+        document.addEventListener('DOMContentLoaded', () => {
+            renderCalendario();
+            renderProximosVoos();
+        });
     </script>
 </body>
 </html>
 '''
 
 
-@app.route('/')
-def index():
-    sf = conectar_salesforce()
-    if not sf:
-        return render_template_string('''
-        <!DOCTYPE html>
-        <html><head><title>Erro</title></head>
-        <body style="background:#0f172a;color:#ef4444;display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;">
-            <div style="text-align:center;">
-                <h1>Erro de Conexao</h1>
-                <p>Nao foi possivel conectar ao Salesforce. Verifique as credenciais.</p>
-            </div>
-        </body></html>
-        ''')
-    
-    voos = buscar_voos(sf)
-    voos_por_dia, stats = processar_voos(voos)
-    
+def _serialize_voos(voos_por_dia):
+    """Serializa voos para JSON (sem receita)"""
     voos_json = {}
     for data, lista in voos_por_dia.items():
         voos_json[data] = []
@@ -873,7 +1034,6 @@ def index():
                 'status': v['status'],
                 'is_pago': v['is_pago'],
                 'passageiros': v['passageiros'],
-                'receita': v['receita'],
                 'name': v['name'],
                 'is_retorno': v['is_retorno'],
                 'retorno_info': None
@@ -889,6 +1049,48 @@ def index():
                     'destino_nome': v['retorno_info']['destino_nome']
                 }
             voos_json[data].append(voo_dict)
+    return voos_json
+
+
+def _get_cached_data():
+    """Busca dados com cache de 2 minutos"""
+    now = time.time()
+    with _cache_lock:
+        if _cache['data'] and (now - _cache['timestamp']) < CACHE_TTL:
+            return _cache['data'], _cache['stats'], _cache['raw_json']
+    
+    sf = conectar_salesforce()
+    if not sf:
+        return None, None, None
+    
+    voos = buscar_voos(sf)
+    voos_por_dia, stats = processar_voos(voos)
+    voos_json = _serialize_voos(voos_por_dia)
+    
+    with _cache_lock:
+        _cache['data'] = voos_por_dia
+        _cache['stats'] = stats
+        _cache['raw_json'] = voos_json
+        _cache['timestamp'] = time.time()
+    
+    return voos_por_dia, stats, voos_json
+
+
+@app.route('/')
+def index():
+    voos_por_dia, stats, voos_json = _get_cached_data()
+    
+    if voos_por_dia is None:
+        return render_template_string('''
+        <!DOCTYPE html>
+        <html><head><title>Erro</title></head>
+        <body style="background:#0f172a;color:#ef4444;display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;">
+            <div style="text-align:center;">
+                <h1>Erro de Conexao</h1>
+                <p>Nao foi possivel conectar ao Salesforce. Verifique as credenciais.</p>
+            </div>
+        </body></html>
+        ''')
     
     return render_template_string(
         HTML_TEMPLATE,
@@ -900,6 +1102,19 @@ def index():
         stats=stats,
         data_atualizacao=datetime.now().strftime('%d/%m/%Y %H:%M')
     )
+
+
+@app.route('/api/voos')
+def api_voos():
+    """API para auto-refresh sem recarregar a pagina"""
+    voos_por_dia, stats, voos_json = _get_cached_data()
+    if voos_json is None:
+        return jsonify({'error': 'Erro ao conectar ao Salesforce'}), 500
+    return jsonify({
+        'voos': voos_json,
+        'stats': stats,
+        'atualizado_em': datetime.now().strftime('%d/%m/%Y %H:%M')
+    })
 
 
 @app.route('/health')
