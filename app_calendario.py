@@ -1081,16 +1081,33 @@ def index():
     voos_por_dia, stats, voos_json = _get_cached_data()
     
     if voos_por_dia is None:
+        sf_user = os.environ.get('SF_USERNAME', '')
+        sf_domain = os.environ.get('SF_DOMAIN', 'login')
+        has_creds = bool(sf_user and os.environ.get('SF_PASSWORD') and os.environ.get('SF_SECURITY_TOKEN'))
         return render_template_string('''
         <!DOCTYPE html>
-        <html><head><title>Erro</title></head>
-        <body style="background:#0f172a;color:#ef4444;display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;">
-            <div style="text-align:center;">
-                <h1>Erro de Conexao</h1>
-                <p>Nao foi possivel conectar ao Salesforce. Verifique as credenciais.</p>
+        <html><head><title>Erro de Conexao - REVO</title></head>
+        <body style="background:#0f172a;color:#e2e8f0;display:flex;justify-content:center;align-items:center;height:100vh;font-family:'Segoe UI',Tahoma,sans-serif;">
+            <div style="text-align:center;max-width:600px;padding:40px;">
+                <h1 style="color:#ef4444;margin-bottom:20px;">Erro de Conexao</h1>
+                <p style="margin-bottom:20px;">Nao foi possivel conectar ao Salesforce.</p>
+                {% if not has_creds %}
+                <div style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:20px;text-align:left;margin-bottom:20px;">
+                    <p style="color:#f59e0b;font-weight:600;margin-bottom:10px;">Variaveis de ambiente necessarias:</p>
+                    <code style="color:#94a3b8;display:block;line-height:2;">
+                        SF_USERNAME=seu_usuario@salesforce.com<br>
+                        SF_PASSWORD=sua_senha<br>
+                        SF_SECURITY_TOKEN=seu_token<br>
+                        SF_DOMAIN=login
+                    </code>
+                </div>
+                <p style="color:#64748b;font-size:0.85rem;">Configure as variaveis de ambiente no Cloud Run ou no arquivo .env</p>
+                {% else %}
+                <p style="color:#f59e0b;">Credenciais encontradas para <strong>{{ sf_user }}</strong> (domain: {{ sf_domain }}), mas a conexao falhou. Verifique se estao corretas.</p>
+                {% endif %}
             </div>
         </body></html>
-        ''')
+        ''', has_creds=has_creds, sf_user=sf_user, sf_domain=sf_domain), 503
     
     return render_template_string(
         HTML_TEMPLATE,
