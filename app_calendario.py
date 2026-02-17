@@ -857,14 +857,118 @@ HTML_TEMPLATE = '''
             text-align: center; padding: 50px; color: #64748b; font-size: 1.1rem;
         }
         
+        /* ===== RESPONSIVIDADE ===== */
         @media (max-width: 1200px) {
             .stats-grid { grid-template-columns: repeat(3, 1fr); }
             .gantt-info { width: 120px; min-width: 120px; }
             .timeline-header { padding-left: 120px; }
         }
+        
         @media (max-width: 768px) {
-            .stats-grid { grid-template-columns: repeat(2, 1fr); }
-            .calendar-grid { grid-template-columns: repeat(2, 1fr); }
+            .container { padding: 10px; }
+            .header { font-size: 0.75rem; }
+            
+            .legend { gap: 10px; margin-bottom: 15px; }
+            .legend-item { padding: 5px 10px; font-size: 0.75rem; }
+            .legend-icon { width: 24px; height: 24px; }
+            
+            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 12px; }
+            .stat-card { padding: 10px; }
+            .stat-number { font-size: 1.5rem; }
+            .stat-label { font-size: 0.7rem; }
+            
+            .next-flights-grid { gap: 8px; }
+            .nf-card { min-width: 160px; padding: 10px; }
+            .nf-prefix { font-size: 0.8rem; }
+            .nf-route { font-size: 0.78rem; }
+            .nf-time { font-size: 0.72rem; }
+            
+            .filters-bar { gap: 6px; margin-bottom: 12px; }
+            .filter-btn { padding: 5px 10px; font-size: 0.75rem; }
+            .filter-label { font-size: 0.7rem; }
+            .filter-separator { height: 18px; }
+            
+            .calendar-wrapper { padding: 12px; }
+            .month-nav { flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 12px; padding-bottom: 10px; }
+            .month-title { font-size: 1.1rem; }
+            .nav-btn { padding: 6px 12px; font-size: 0.8rem; }
+            
+            .weekdays-header { display: none; }
+            .calendar-grid { grid-template-columns: repeat(4, 1fr); gap: 5px; }
+            .day-cell { min-height: 110px; padding: 6px; }
+            .day-number { font-size: 0.95rem; margin-bottom: 4px; }
+            .flight-item { padding: 2px 4px; font-size: 0.68rem; gap: 3px; }
+            .flight-icon { width: 14px; height: 14px; }
+            .flight-time { font-size: 0.65rem; min-width: 30px; }
+            .flight-route { font-size: 0.65rem; }
+            .flight-tooltip { font-size: 0.7rem; padding: 6px 8px; }
+            
+            .modal-overlay { padding: 8px; }
+            .modal-container { max-width: 100%; border-radius: 10px; }
+            .modal-header { padding: 12px 14px; flex-wrap: wrap; gap: 8px; }
+            .modal-title { font-size: 1.1rem; }
+            .modal-subtitle { font-size: 0.78rem; }
+            .modal-close { width: 32px; height: 32px; font-size: 1.2rem; }
+            .modal-legend { gap: 10px; padding: 10px 14px; flex-wrap: wrap; }
+            .modal-legend-item { font-size: 0.72rem; gap: 5px; }
+            .modal-legend-color { width: 28px; height: 14px; }
+            .modal-body { padding: 10px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+            .modal-body > .timeline-header,
+            .modal-body > .gantt-row { min-width: 700px; }
+            
+            .timeline-header { padding-left: 80px; padding-bottom: 6px; margin-bottom: 6px; }
+            .timeline-hour { font-size: 0.6rem; width: 36px; }
+            .gantt-row { margin-bottom: 4px; }
+            .gantt-info { width: 80px; min-width: 80px; padding: 6px 8px; gap: 4px; }
+            .gantt-info-icon { width: 28px; height: 28px; }
+            .gantt-info-ref { font-size: 0.75rem; }
+            .gantt-bar { font-size: 0.6rem; padding: 1px 3px; }
+            .gantt-bar-route { font-size: 0.6rem; }
+            .gantt-bar-pax { font-size: 0.55rem; }
+            
+            .gantt-bar-popup { min-width: 240px; max-width: 90vw; padding: 12px 14px; font-size: 0.88rem; }
+            .gantt-bar-popup-title { font-size: 1rem; margin-bottom: 8px; padding-bottom: 6px; }
+            .gantt-bar-popup-row { font-size: 0.82rem; margin-bottom: 5px; gap: 6px; }
+            .gantt-bar-popup-label { min-width: 75px; }
+            
+            .map-section { padding: 12px; margin-top: 15px; }
+            #flight-map { height: 280px; }
+            .map-section-title { font-size: 1rem; flex-wrap: wrap; gap: 8px; }
+            .map-day-btn { padding: 4px 10px; font-size: 0.75rem; }
+            
+            .refresh-bar { margin-bottom: 6px; }
+        }
+        
+        @media (max-width: 480px) {
+            .container { padding: 6px; }
+            
+            .legend { gap: 6px; }
+            .legend-item { padding: 4px 8px; font-size: 0.68rem; }
+            .legend-icon { width: 20px; height: 20px; }
+            
+            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 5px; }
+            .stat-number { font-size: 1.3rem; }
+            
+            .calendar-grid { grid-template-columns: repeat(2, 1fr); gap: 4px; }
+            .day-cell { min-height: 90px; padding: 5px; }
+            .day-number { font-size: 0.85rem; }
+            .flight-item { font-size: 0.6rem; }
+            .flight-icon { width: 12px; height: 12px; }
+            
+            .nf-card { min-width: 140px; padding: 8px; }
+            
+            .month-title { font-size: 0.95rem; }
+            .nav-btn { padding: 5px 10px; font-size: 0.72rem; }
+            
+            .modal-header { padding: 10px; }
+            .modal-title { font-size: 0.95rem; }
+            .modal-body { padding: 8px; }
+            .timeline-header { padding-left: 60px; }
+            .gantt-info { width: 60px; min-width: 60px; padding: 4px; }
+            .gantt-info-icon { width: 22px; height: 22px; }
+            .gantt-info-ref { font-size: 0.65rem; }
+            
+            #flight-map { height: 220px; }
         }
         
         /* ===== MAPA DE VOOS ===== */
