@@ -6,6 +6,13 @@ Layout com visualizacao Gantt detalhada por dia
 from flask import Flask, render_template_string, jsonify, request
 import os
 import time
+
+# Carregar .env do diretório do script (garante funcionar de qualquer cwd)
+_app_dir = os.path.dirname(os.path.abspath(__file__))
+_env_path = os.path.join(_app_dir, '.env')
+if os.path.exists(_env_path):
+    from dotenv import load_dotenv
+    load_dotenv(_env_path)
 from datetime import datetime, timedelta
 from simple_salesforce import Salesforce
 import logging
@@ -29,6 +36,8 @@ HELICOPTEROS = {
     'PR-OOE': {'modelo': 'EC135', 'cor': '#F59E0B', 'velocidade_kmh': 222.24}
 }
 
+# Helipontos/aeródromos: nome, lat, lon.
+# Códigos não cadastrados: consultar ROTAER (AISWEB) https://aisweb.decea.mil.br/?i=aerodromos&p=rotaer
 HELIPONTOS = {
     'SIAV': {'nome': 'Helipark', 'lat': -23.5647, 'lon': -46.8303},
     'SBGR': {'nome': 'Aeroporto de Guarulhos', 'lat': -23.4356, 'lon': -46.4731},
@@ -41,6 +50,7 @@ HELIPONTOS = {
     'SNGL': {'nome': 'Boa Vista (Porto Feliz)', 'lat': -23.3319, 'lon': -47.5594},
     'SSJN': {'nome': 'Faz. Santa Helena (Braganca Paulista)', 'lat': -22.9706, 'lon': -46.6803},
     'SDLA': {'nome': 'Cond. Laranjeiras (Paraty)', 'lat': -23.3433, 'lon': -44.6631},
+    'SDUB': {'nome': 'Aeroporto de Ubatuba', 'lat': -23.4411, 'lon': -45.0756},
     'SJCG': {'nome': 'Iate Clube de Santos (Angra)', 'lat': -22.9781, 'lon': -44.4336},
     'SBJH': {'nome': 'SP Catarina Aeroporto Executivo', 'lat': -23.4269, 'lon': -47.1658},
     'SWWD': {'nome': 'Dom Pedro Business Park (Atibaia)', 'lat': -23.0506, 'lon': -46.6728},
@@ -66,6 +76,11 @@ HELIPONTOS = {
 }
 
 HANGAR_BASE = 'SIAV'
+
+# ROTAER (AISWEB/DECEA): consulta de aeródromos por código ICAO
+# https://aisweb.decea.mil.br/?i=aerodromos&p=rotaer
+ROTAER_URL = 'https://aisweb.decea.mil.br/?i=aerodromos&codigo='
+ROTAER_PAGE = 'https://aisweb.decea.mil.br/?i=aerodromos&p=rotaer'
 
 ICONS_BASE64 = {
     'PR-OMB': 'data:image/png;base64,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',
@@ -110,28 +125,68 @@ def conectar_salesforce():
         return None
 
 
-def extrair_icao_da_rota(rota):
+def normalizar_prefixo(prefixo_raw):
+    """Aceita OMB, PR OMB, PR-OMB etc e retorna PR-OMB, PR-OMH ou PR-OOE."""
+    if not prefixo_raw:
+        return None
+    p = str(prefixo_raw).upper().strip()
+    p = p.replace(' ', '-').replace('_', '-')
+    if p in HELICOPTEROS:
+        return p
+    for k in HELICOPTEROS:
+        if p == k.replace('PR-', '') or p.endswith(k) or k.endswith(p):
+            return k
+    return None
+
+
+def _parsear_partes_rota(rota):
+    """Retorna lista de codigos ICAO da rota (ex: SIAV-SDUB-SDLA -> ['SIAV','SDUB','SDLA'])."""
     if not rota:
-        return 'N/A', 'N/A'
+        return []
     rota = str(rota).upper().strip()
     partes = rota.replace('/', '-').replace('X', '-').replace(' ', '-').split('-')
-    partes = [p.strip() for p in partes if p.strip()]
+    return [p.strip()[:4] for p in partes if p.strip() and len(p.strip()) >= 4]
+
+
+def extrair_icao_da_rota(rota):
+    partes = _parsear_partes_rota(rota)
     if len(partes) >= 2:
-        return partes[0][:4], partes[-1][:4]
+        return partes[0], partes[-1]
     elif len(partes) == 1:
-        return partes[0][:4], partes[0][:4]
+        return partes[0], partes[0]
     return 'N/A', 'N/A'
 
 
+def extrair_pernas_da_rota(rota):
+    """Retorna lista de (origem, destino) para cada perna. Ex: SIAV-SDUB-SDLA -> [(SIAV,SDUB),(SDUB,SDLA)]."""
+    partes = _parsear_partes_rota(rota)
+    if len(partes) < 2:
+        return []
+    return [(partes[i], partes[i + 1]) for i in range(len(partes) - 1)]
+
+
+def rota_ja_inclui_perna_vazia(rota):
+    """Ex: SIAV-SBGR-SDLA-SIAV indica que a perna vazia (retorno a base) ja esta na rota."""
+    if not rota:
+        return False
+    rota = str(rota).upper().strip()
+    partes = rota.replace('/', '-').replace('X', '-').replace(' ', '-').split('-')
+    partes = [p.strip()[:4] for p in partes if p.strip()]
+    return len(partes) >= 2 and partes[-1] == HANGAR_BASE
+
+
 def buscar_voos(sf):
-    hoje = datetime.now().strftime('%Y-%m-%d')
+    """Busca TODOS os voos cadastrados (sem filtro de status)."""
+    hoje = datetime.now()
+    data_inicio = (hoje - timedelta(days=730)).strftime('%Y-%m-%d')  # 2 anos atras
+    data_fim = (hoje + timedelta(days=730)).strftime('%Y-%m-%d')      # 2 anos a frente
     query = f"""
     SELECT Id, Name, Tipo__c, Status__c, DataHoraVoo__c, 
            Rota__c, RotaAbreviada__c, Prefixo__c, PrefixoTexto__c,
            ContadorPassageiros__c, ReceitaVoo__c, PerspectivaReceitaVoo__c, Duracao__c
     FROM Voo__c 
-    WHERE DataHoraVoo__c >= {hoje}T00:00:00Z
-    AND (Status__c LIKE '%Confirm%' OR Status__c LIKE '%Reserv%' OR Status__c LIKE '%Pago%')
+    WHERE DataHoraVoo__c >= {data_inicio}T00:00:00Z
+    AND DataHoraVoo__c <= {data_fim}T23:59:59Z
     ORDER BY DataHoraVoo__c ASC
     """
     try:
@@ -144,7 +199,194 @@ def buscar_voos(sf):
         return []
 
 
-def processar_voos(voos):
+def buscar_trechos(sf):
+    """Busca Trechos (pernas) com dados reais: Decolagem/Pouso, CodigoOrigem/Destino, passageiros por perna."""
+    hoje = datetime.now()
+    data_inicio = (hoje - timedelta(days=730)).strftime('%Y-%m-%d')
+    data_fim = (hoje + timedelta(days=730)).strftime('%Y-%m-%d')
+    query = (
+        f"SELECT Id, Voo__c, Decolagem__c, Pouso__c, PrevisaoDecolagem__c, PrevisaoPouso__c, TempoCruzeiro__c, "
+        f"CodigoOrigem__c, CodigoDestino__c, PrefixoAeronave__c, OrdemExecucao__c, "
+        f"PassageirosEmbarcando__c, QtdPassageiros__c, "
+        f"Voo__r.DataHoraVoo__c, Voo__r.Name, Voo__r.Status__c, Voo__r.Tipo__c, "
+        f"Voo__r.ContadorPassageiros__c, Voo__r.ReceitaVoo__c, Voo__r.PerspectivaReceitaVoo__c "
+        f"FROM Trecho__c "
+        f"WHERE Voo__r.DataHoraVoo__c >= {data_inicio}T00:00:00Z "
+        f"AND Voo__r.DataHoraVoo__c <= {data_fim}T23:59:59Z "
+        f"ORDER BY Voo__r.DataHoraVoo__c, OrdemExecucao__c"
+    )
+    try:
+        result = sf.query_all(query)
+        trechos = result.get('records', [])
+        logging.info(f"Encontrados {len(trechos)} trechos")
+        return trechos
+    except Exception as e:
+        logging.error(f"Erro na query Trecho__c: {e}")
+        return []
+
+
+def processar_trechos(trechos):
+    """Processa Trecho__c em voo_info: dados reais por perna (Decolagem, Pouso, passageiros)."""
+    from collections import defaultdict
+    voos_por_dia = {}
+    voo_ids_com_trechos = set()
+    stats = {
+        'total_voos': 0,
+        'total_retornos': 0,
+        'por_aeronave': {'PR-OMB': 0, 'PR-OMH': 0, 'PR-OOE': 0},
+        'total_horas': 0.0,
+        'total_shuttle': 0,
+        'total_charter': 0
+    }
+    retornos_cadastrados = set()
+
+    # Agrupar trechos por Voo__c, ordenados por OrdemExecucao
+    por_voo = defaultdict(list)
+    for t in trechos:
+        vid = t.get('Voo__c')
+        if vid:
+            por_voo[vid].append(t)
+    for vid in por_voo:
+        por_voo[vid].sort(key=lambda x: (float(x.get('OrdemExecucao__c') or 0), x.get('Id') or ''))
+
+    for voo_id, lista_trechos in por_voo.items():
+        if not lista_trechos:
+            continue
+        primeiro = lista_trechos[0]
+        vr = primeiro.get('Voo__r') or {}
+        prefixo = normalizar_prefixo(
+            primeiro.get('PrefixoAeronave__c') or vr.get('PrefixoTexto__c') or ''
+        )
+        if prefixo is None or prefixo not in HELICOPTEROS:
+            continue
+        status = vr.get('Status__c', '')
+        is_pago = 'pago' in status.lower() if status else False
+        tipo_str = vr.get('Tipo__c', 'Charter')
+        tipo_lower = (tipo_str or '').lower()
+        receita_total = float(vr.get('ReceitaVoo__c', 0) or 0) or float(vr.get('PerspectivaReceitaVoo__c', 0) or 0)
+
+        voo_ids_com_trechos.add(voo_id)
+        dt_voo_str = vr.get('DataHoraVoo__c')
+        try:
+            dt_voo = datetime.fromisoformat(dt_voo_str.replace('Z', '+00:00')) if dt_voo_str else None
+            dt_voo_local = dt_voo - timedelta(hours=3) if (dt_voo and dt_voo.tzinfo) else dt_voo
+        except Exception:
+            dt_voo_local = None
+
+        pouso_anterior = None
+        for idx, t in enumerate(lista_trechos):
+            origem = (t.get('CodigoOrigem__c') or '').strip().upper()[:4]
+            destino = (t.get('CodigoDestino__c') or '').strip().upper()[:4]
+            if not origem or not destino or origem == destino:
+                continue
+
+            dep_dt = None
+            for f in ('Decolagem__c', 'PrevisaoDecolagem__c'):
+                val = t.get(f)
+                if val:
+                    try:
+                        dep_dt = datetime.fromisoformat(val.replace('Z', '+00:00'))
+                        dep_dt = dep_dt - timedelta(hours=3) if dep_dt.tzinfo else dep_dt
+                        break
+                    except Exception:
+                        pass
+            if dep_dt is None and pouso_anterior is not None:
+                dep_dt = pouso_anterior + timedelta(minutes=15)
+            elif dep_dt is None and dt_voo_local and idx == 0:
+                dep_dt = dt_voo_local
+
+            arr_dt = None
+            for f in ('Pouso__c', 'PrevisaoPouso__c'):
+                val = t.get(f)
+                if val:
+                    try:
+                        arr_dt = datetime.fromisoformat(val.replace('Z', '+00:00'))
+                        arr_dt = arr_dt - timedelta(hours=3) if arr_dt.tzinfo else arr_dt
+                        break
+                    except Exception:
+                        pass
+            if arr_dt is None and dep_dt is not None:
+                tempo_cruzeiro = float(t.get('TempoCruzeiro__c', 0) or 0)
+                if tempo_cruzeiro > 0:
+                    arr_dt = dep_dt + timedelta(minutes=tempo_cruzeiro)
+                else:
+                    arr_dt = dep_dt + timedelta(minutes=20)
+
+            if dep_dt is None or arr_dt is None:
+                continue
+
+            pouso_anterior = arr_dt
+            origem_nome = HELIPONTOS.get(origem, {}).get('nome', origem)
+            destino_nome = HELIPONTOS.get(destino, {}).get('nome', destino)
+            duracao_min = int((arr_dt - dep_dt).total_seconds() / 60)
+            data_str = dep_dt.strftime('%Y-%m-%d')
+            pax = int(t.get('PassageirosEmbarcando__c') or t.get('QtdPassageiros__c') or 0)
+            receita = receita_total / len(lista_trechos) if idx == 0 else 0
+
+            voo_info = {
+                'id': t.get('Id'),
+                'name': vr.get('Name', ''),
+                'prefixo': prefixo,
+                'origem': origem,
+                'destino': destino,
+                'origem_nome': origem_nome,
+                'destino_nome': destino_nome,
+                'inicio': dep_dt,
+                'fim': arr_dt,
+                'duracao_min': duracao_min,
+                'tipo': tipo_str,
+                'status': status,
+                'is_pago': is_pago,
+                'passageiros': pax,
+                'receita': receita,
+                'is_retorno': False,
+                'retorno_info': None,
+                'fonte': 'trecho'
+            }
+
+            if destino != HANGAR_BASE:
+                ultimo_trecho = lista_trechos[-1]
+                ultimo_dest = (ultimo_trecho.get('CodigoDestino__c') or '').strip().upper()[:4]
+                if ultimo_dest != HANGAR_BASE and idx == len(lista_trechos) - 1:
+                    chave_retorno = (prefixo, data_str, destino)
+                    if chave_retorno not in retornos_cadastrados:
+                        tempo_retorno = calcular_tempo_retorno(destino, prefixo)
+                        retorno_inicio = arr_dt + timedelta(minutes=10)
+                        retorno_fim = retorno_inicio + timedelta(hours=tempo_retorno)
+                        voo_info['retorno_info'] = {
+                            'inicio': retorno_inicio,
+                            'fim': retorno_fim,
+                            'duracao_min': int((retorno_fim - retorno_inicio).total_seconds() / 60),
+                            'origem': destino,
+                            'destino': HANGAR_BASE,
+                            'origem_nome': destino_nome,
+                            'destino_nome': HELIPONTOS.get(HANGAR_BASE, {}).get('nome', HANGAR_BASE)
+                        }
+                        retornos_cadastrados.add(chave_retorno)
+                        stats['total_retornos'] += 1
+
+            if data_str not in voos_por_dia:
+                voos_por_dia[data_str] = []
+            voos_por_dia[data_str].append(voo_info)
+            stats['total_voos'] += 1
+            stats['por_aeronave'][prefixo] += 1
+            if 'shuttle' in tipo_lower:
+                stats['total_shuttle'] += 1
+            else:
+                stats['total_charter'] += 1
+            stats['total_horas'] += duracao_min / 60.0
+            if voo_info.get('retorno_info'):
+                stats['total_horas'] += voo_info['retorno_info']['duracao_min'] / 60.0
+
+    for data in voos_por_dia:
+        voos_por_dia[data].sort(key=lambda x: x['inicio'])
+    return voos_por_dia, stats, voo_ids_com_trechos, retornos_cadastrados
+
+
+def processar_voos(voos, voo_ids_com_trechos=None, retornos_cadastrados_in=None):
+    """Processa Voo__c. Exclui voos cujos trechos ja foram processados (voo_ids_com_trechos)."""
+    voo_ids_com_trechos = voo_ids_com_trechos or set()
+    retornos_cadastrados = set(retornos_cadastrados_in) if retornos_cadastrados_in else set()
     voos_por_dia = {}
     stats = {
         'total_voos': 0,
@@ -155,10 +397,31 @@ def processar_voos(voos):
         'total_charter': 0
     }
     
+    # Perna vazia ja registrada no SF: (prefixo, data, origem) para voos destino=SIAV
+    for v in voos:
+        if v.get('Id') in voo_ids_com_trechos:
+            continue
+        pref = normalizar_prefixo(v.get('PrefixoTexto__c') or v.get('Prefixo__c') or '')
+        if pref not in HELICOPTEROS:
+            continue
+        dt_s = v.get('DataHoraVoo__c')
+        if not dt_s:
+            continue
+        try:
+            dt = datetime.fromisoformat(dt_s.replace('Z', '+00:00'))
+            dt_local = dt - timedelta(hours=3) if dt.tzinfo else dt
+        except:
+            continue
+        rota = v.get('RotaAbreviada__c') or v.get('Rota__c') or ''
+        orig, dest = extrair_icao_da_rota(rota)
+        if dest == HANGAR_BASE and orig in HELIPONTOS and orig != HANGAR_BASE:
+            retornos_cadastrados.add((pref, dt_local.strftime('%Y-%m-%d'), orig))
+    
     for voo in voos:
-        prefixo = voo.get('PrefixoTexto__c') or voo.get('Prefixo__c') or ''
-        prefixo = str(prefixo).upper().strip()
-        if prefixo not in HELICOPTEROS:
+        if voo.get('Id') in voo_ids_com_trechos:
+            continue
+        prefixo = normalizar_prefixo(voo.get('PrefixoTexto__c') or voo.get('Prefixo__c') or '')
+        if prefixo is None or prefixo not in HELICOPTEROS:
             continue
             
         dt_str = voo.get('DataHoraVoo__c')
@@ -172,75 +435,136 @@ def processar_voos(voos):
             continue
         
         rota = voo.get('RotaAbreviada__c') or voo.get('Rota__c') or ''
-        origem, destino = extrair_icao_da_rota(rota)
-        
-        duracao_estimada = float(voo.get('Duracao__c', 0) or 0) or 0.5
-        dep_time = dt_local
-        arr_time = dt_local + timedelta(hours=duracao_estimada)
-        
-        origem_nome = HELIPONTOS.get(origem, {}).get('nome', origem)
-        destino_nome = HELIPONTOS.get(destino, {}).get('nome', destino)
-        
-        duracao_min = int((arr_time - dep_time).total_seconds() / 60)
-        
+        pernas = extrair_pernas_da_rota(rota)
+        duracao_total = float(voo.get('Duracao__c', 0) or 0) or 0.5
         status = voo.get('Status__c', '')
         is_pago = 'pago' in status.lower() if status else False
-        
-        voo_info = {
-            'id': voo.get('Id'),
-            'name': voo.get('Name', ''),
-            'prefixo': prefixo,
-            'origem': origem,
-            'destino': destino,
-            'origem_nome': origem_nome,
-            'destino_nome': destino_nome,
-            'inicio': dep_time,
-            'fim': arr_time,
-            'duracao_min': duracao_min,
-            'tipo': voo.get('Tipo__c', 'Charter'),
-            'status': status,
-            'is_pago': is_pago,
-            'passageiros': voo.get('ContadorPassageiros__c', 0) or 0,
-            'receita': float(voo.get('ReceitaVoo__c', 0) or 0) or float(voo.get('PerspectivaReceitaVoo__c', 0) or 0),
-            'is_retorno': False,
-            'retorno_info': None
-        }
-        
-        if destino != HANGAR_BASE and destino in HELIPONTOS:
-            tempo_retorno = calcular_tempo_retorno(destino, prefixo)
-            retorno_inicio = arr_time + timedelta(minutes=10)
-            retorno_fim = retorno_inicio + timedelta(hours=tempo_retorno)
-            duracao_ret = int((retorno_fim - retorno_inicio).total_seconds() / 60)
-            
-            voo_info['retorno_info'] = {
-                'inicio': retorno_inicio,
-                'fim': retorno_fim,
-                'duracao_min': duracao_ret,
-                'origem': destino,
-                'destino': HANGAR_BASE,
-                'origem_nome': destino_nome,
-                'destino_nome': HELIPONTOS.get(HANGAR_BASE, {}).get('nome', HANGAR_BASE)
-            }
-            stats['total_retornos'] += 1
-        
-        data_str = dep_time.strftime('%Y-%m-%d')
-        if data_str not in voos_por_dia:
-            voos_por_dia[data_str] = []
-        voos_por_dia[data_str].append(voo_info)
-        
-        stats['total_voos'] += 1
-        stats['por_aeronave'][prefixo] += 1
-        
         tipo_lower = (voo.get('Tipo__c', '') or '').lower()
-        if 'shuttle' in tipo_lower:
-            stats['total_shuttle'] += 1
-        else:
-            stats['total_charter'] += 1
+        passageiros_total = voo.get('ContadorPassageiros__c', 0) or 0
+        receita_total = float(voo.get('ReceitaVoo__c', 0) or 0) or float(voo.get('PerspectivaReceitaVoo__c', 0) or 0)
         
-        stats['total_horas'] += duracao_estimada
-        if voo_info.get('retorno_info'):
-            ret_dur = voo_info['retorno_info']['duracao_min'] / 60.0
-            stats['total_horas'] += ret_dur
+        # Se rota tem multiplas pernas, criar um bloco por perna com horarios estimados
+        if len(pernas) >= 2:
+            buffer_min_entre_pernas = 10
+            horas_voo = duracao_total - (len(pernas) - 1) * (buffer_min_entre_pernas / 60.0)
+            duracao_por_perna_h = max(0.15, horas_voo / len(pernas)) if horas_voo > 0 else 0.5
+            dep_atual = dt_local
+            for idx, (origem, destino) in enumerate(pernas):
+                arr_atual = dep_atual + timedelta(hours=duracao_por_perna_h)
+                origem_nome = HELIPONTOS.get(origem, {}).get('nome', origem)
+                destino_nome = HELIPONTOS.get(destino, {}).get('nome', destino)
+                duracao_min = int((arr_atual - dep_atual).total_seconds() / 60)
+                data_str = dep_atual.strftime('%Y-%m-%d')
+                # Passageiros/receita apenas na primeira perna (SF nao detalha por perna)
+                pax = passageiros_total if idx == 0 else 0
+                rec = receita_total if idx == 0 else 0
+                voo_info = {
+                    'id': voo.get('Id'),
+                    'name': voo.get('Name', ''),
+                    'prefixo': prefixo,
+                    'origem': origem,
+                    'destino': destino,
+                    'origem_nome': origem_nome,
+                    'destino_nome': destino_nome,
+                    'inicio': dep_atual,
+                    'fim': arr_atual,
+                    'duracao_min': duracao_min,
+                    'tipo': voo.get('Tipo__c', 'Charter'),
+                    'status': status,
+                    'is_pago': is_pago,
+                    'passageiros': pax,
+                    'receita': rec,
+                    'is_retorno': False,
+                    'retorno_info': None
+                }
+                if destino != HANGAR_BASE and not rota_ja_inclui_perna_vazia(rota):
+                    chave_retorno = (prefixo, data_str, destino)
+                    if chave_retorno not in retornos_cadastrados and idx == len(pernas) - 1:
+                        tempo_retorno = calcular_tempo_retorno(destino, prefixo)
+                        retorno_inicio = arr_atual + timedelta(minutes=10)
+                        retorno_fim = retorno_inicio + timedelta(hours=tempo_retorno)
+                        voo_info['retorno_info'] = {
+                            'inicio': retorno_inicio,
+                            'fim': retorno_fim,
+                            'duracao_min': int((retorno_fim - retorno_inicio).total_seconds() / 60),
+                            'origem': destino,
+                            'destino': HANGAR_BASE,
+                            'origem_nome': destino_nome,
+                            'destino_nome': HELIPONTOS.get(HANGAR_BASE, {}).get('nome', HANGAR_BASE)
+                        }
+                        stats['total_retornos'] += 1
+                if data_str not in voos_por_dia:
+                    voos_por_dia[data_str] = []
+                voos_por_dia[data_str].append(voo_info)
+                stats['total_voos'] += 1
+                stats['por_aeronave'][prefixo] += 1
+                if 'shuttle' in tipo_lower:
+                    stats['total_shuttle'] += 1
+                else:
+                    stats['total_charter'] += 1
+                stats['total_horas'] += duracao_por_perna_h
+                if voo_info.get('retorno_info'):
+                    stats['total_horas'] += voo_info['retorno_info']['duracao_min'] / 60.0
+                dep_atual = arr_atual + timedelta(minutes=buffer_min_entre_pernas)
+        else:
+            # Rota simples (1 perna) - logica original
+            origem, destino = extrair_icao_da_rota(rota)
+            duracao_estimada = duracao_total
+            dep_time = dt_local
+            arr_time = dt_local + timedelta(hours=duracao_estimada)
+            origem_nome = HELIPONTOS.get(origem, {}).get('nome', origem)
+            destino_nome = HELIPONTOS.get(destino, {}).get('nome', destino)
+            duracao_min = int((arr_time - dep_time).total_seconds() / 60)
+            data_str = dep_time.strftime('%Y-%m-%d')
+            voo_info = {
+                'id': voo.get('Id'),
+                'name': voo.get('Name', ''),
+                'prefixo': prefixo,
+                'origem': origem,
+                'destino': destino,
+                'origem_nome': origem_nome,
+                'destino_nome': destino_nome,
+                'inicio': dep_time,
+                'fim': arr_time,
+                'duracao_min': duracao_min,
+                'tipo': voo.get('Tipo__c', 'Charter'),
+                'status': status,
+                'is_pago': is_pago,
+                'passageiros': passageiros_total,
+                'receita': receita_total,
+                'is_retorno': False,
+                'retorno_info': None
+            }
+            if destino != HANGAR_BASE and not rota_ja_inclui_perna_vazia(rota):
+                chave_retorno = (prefixo, data_str, destino)
+                if chave_retorno not in retornos_cadastrados:
+                    tempo_retorno = calcular_tempo_retorno(destino, prefixo)
+                    retorno_inicio = arr_time + timedelta(minutes=10)
+                    retorno_fim = retorno_inicio + timedelta(hours=tempo_retorno)
+                    duracao_ret = int((retorno_fim - retorno_inicio).total_seconds() / 60)
+                    voo_info['retorno_info'] = {
+                        'inicio': retorno_inicio,
+                        'fim': retorno_fim,
+                        'duracao_min': duracao_ret,
+                        'origem': destino,
+                        'destino': HANGAR_BASE,
+                        'origem_nome': destino_nome,
+                        'destino_nome': HELIPONTOS.get(HANGAR_BASE, {}).get('nome', HANGAR_BASE)
+                    }
+                    stats['total_retornos'] += 1
+            if data_str not in voos_por_dia:
+                voos_por_dia[data_str] = []
+            voos_por_dia[data_str].append(voo_info)
+            stats['total_voos'] += 1
+            stats['por_aeronave'][prefixo] += 1
+            if 'shuttle' in tipo_lower:
+                stats['total_shuttle'] += 1
+            else:
+                stats['total_charter'] += 1
+            stats['total_horas'] += duracao_estimada
+            if voo_info.get('retorno_info'):
+                ret_dur = voo_info['retorno_info']['duracao_min'] / 60.0
+                stats['total_horas'] += ret_dur
     
     for data in voos_por_dia:
         voos_por_dia[data].sort(key=lambda x: x['inicio'])
@@ -255,6 +579,7 @@ HTML_TEMPLATE = '''
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Calendario de Disponibilidade - REVO</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -307,6 +632,8 @@ HTML_TEMPLATE = '''
         .filter-btn.active-green { background: #065f46; border-color: #10b981; color: white; }
         .filter-btn.active-orange { background: #78350f; border-color: #f59e0b; color: white; }
         .filter-btn.active-blue { background: #1e3a5f; border-color: #3b82f6; color: white; }
+        .filter-btn.active-purple { background: #4c1d95; border-color: #7c3aed; color: white; }
+        .filter-btn.active-teal { background: #164e63; border-color: #0891b2; color: white; }
         .filter-label { color: #64748b; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
         .filter-separator { width: 1px; height: 24px; background: #475569; }
         
@@ -412,6 +739,14 @@ HTML_TEMPLATE = '''
         .flight-time { color: #94a3b8; font-weight: 500; min-width: 38px; }
         .flight-route { color: #e2e8f0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         
+        /* Dias passados - menor destaque mas legivel */
+        .day-cell.past .flight-item { opacity: 0.6; }
+        .day-cell.past .flight-icon { opacity: 0.7; }
+        .day-cell.past .flight-time { color: #64748b; }
+        .day-cell.past .flight-route { color: #94a3b8; }
+        .day-cell.past .day-number { color: #475569; }
+        .day-cell.past { background: #0b1120; }
+        
         .flight-ret-tag {
             background: #eab308; color: #000; font-size: 0.6rem; font-weight: 700;
             padding: 2px 5px; border-radius: 3px; flex-shrink: 0;
@@ -454,9 +789,9 @@ HTML_TEMPLATE = '''
         
         .modal-body { padding: 20px 30px; }
         
-        /* Timeline Header */
+        /* Timeline Header - 1 linha por aeronave */
         .timeline-header {
-            display: flex; margin-bottom: 10px; padding-left: 420px;
+            display: flex; margin-bottom: 10px; padding-left: 140px;
             border-bottom: 1px solid #334155; padding-bottom: 10px;
         }
         .timeline-hours {
@@ -464,55 +799,51 @@ HTML_TEMPLATE = '''
         }
         .timeline-hour { font-size: 0.75rem; color: #64748b; width: 50px; text-align: center; }
         
-        /* Gantt Row */
+        /* Gantt Row - 1 aeronave por linha */
         .gantt-row {
-            display: flex; margin-bottom: 10px; min-height: 130px;
-            background: #0f172a; border-radius: 10px; overflow: hidden;
+            display: flex; margin-bottom: 6px; min-height: 48px;
+            background: #0f172a; border-radius: 10px; overflow: visible;
+            align-items: stretch;
         }
         
         .gantt-info {
-            width: 420px; min-width: 420px; padding: 15px 20px;
+            width: 140px; min-width: 140px; padding: 12px 16px;
             border-right: 2px solid #334155; font-size: 0.85rem;
-            display: flex; flex-direction: column; justify-content: center;
+            display: flex; align-items: center; gap: 10px;
         }
-        .gantt-info-header {
-            display: flex; align-items: center; gap: 12px; margin-bottom: 8px;
-        }
-        .gantt-info-icon { width: 36px; height: 36px; border-radius: 6px; }
-        .gantt-info-ref { font-weight: 700; color: #e2e8f0; font-size: 1rem; }
-        .gantt-info-cliente { color: #94a3b8; font-size: 0.8rem; }
-        .gantt-info-details { color: #64748b; line-height: 1.6; font-size: 0.85rem; }
-        .gantt-info-details span { color: #e2e8f0; }
-        .gantt-info-rota { margin-top: 6px; color: #94a3b8; font-size: 0.85rem; }
-        .gantt-info-rota strong { color: #e2e8f0; }
-        
-        .gantt-status-tag {
-            display: inline-block; padding: 3px 10px; border-radius: 4px;
-            font-size: 0.75rem; font-weight: 600; margin-left: 10px;
-        }
-        .gantt-status-tag.pago { background: #16a34a; color: white; }
-        .gantt-status-tag.pendente { background: #dc2626; color: white; }
-        .gantt-tipo-tag {
-            display: inline-block; padding: 3px 10px; border-radius: 4px;
-            font-size: 0.75rem; font-weight: 600; margin-left: 6px;
-        }
-        .gantt-tipo-tag.shuttle { background: #7c3aed; color: white; }
-        .gantt-tipo-tag.charter { background: #0369a1; color: white; }
-        .gantt-tipo-tag.other { background: #475569; color: white; }
+        .gantt-info-icon { width: 44px; height: 44px; border-radius: 8px; flex-shrink: 0; }
+        .gantt-info-ref { font-weight: 700; font-size: 1.1rem; }
         
         .gantt-timeline {
-            flex: 1; position: relative; min-height: 130px; padding: 8px 0;
+            flex: 1; position: relative; min-height: 48px; padding: 0;
         }
         
         .gantt-bar {
-            position: absolute; top: 8px; bottom: 8px;
-            border-radius: 6px; display: flex; align-items: center;
-            justify-content: center; font-size: 0.85rem; font-weight: 700;
-            color: white; z-index: 2; overflow: hidden;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            position: absolute; top: 4px; height: calc(100% - 8px);
+            border-radius: 5px; display: flex; flex-direction: row;
+            align-items: center; justify-content: center; padding: 2px 6px; gap: 4px;
+            font-size: 0.72rem; font-weight: 600; z-index: 2; overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.35); text-align: center;
+            white-space: nowrap; text-overflow: ellipsis; cursor: pointer;
         }
-        .gantt-bar.voo { background: #dc2626; z-index: 3; border-right: 2px solid #0f172a; }
+        .gantt-bar.voo { color: white; z-index: 3; }
         .gantt-bar.retorno { background: #eab308; color: #000; z-index: 2; }
+        .gantt-bar-route { font-weight: 700; overflow: hidden; text-overflow: ellipsis; }
+        .gantt-bar-pax { font-size: 0.65rem; opacity: 0.95; }
+        .gantt-bar-popup {
+            display: none; position: fixed; z-index: 9999;
+            min-width: 300px; max-width: 380px; padding: 18px 20px;
+            background: #0f172a; border: 2px solid #475569;
+            border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.7);
+            font-size: 1rem; line-height: 1.65; color: #e2e8f0;
+            pointer-events: none; white-space: normal; text-align: left;
+        }
+        /* Popup visibilidade controlada por JS */
+        .gantt-bar-popup-title { font-size: 1.15rem; font-weight: 700; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 2px solid #334155; }
+        .gantt-bar-popup-row { margin-bottom: 8px; display: flex; gap: 10px; font-size: 0.95rem; }
+        .gantt-bar-popup-label { color: #94a3b8; min-width: 95px; flex-shrink: 0; }
+        .gantt-bar-popup-value { font-weight: 600; }
+        .gantt-bar-popup-rota { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #334155; font-size: 0.9rem; }
         
         .gantt-grid-lines {
             position: absolute; top: 0; left: 0; right: 0; bottom: 0;
@@ -528,18 +859,40 @@ HTML_TEMPLATE = '''
         
         @media (max-width: 1200px) {
             .stats-grid { grid-template-columns: repeat(3, 1fr); }
-            .gantt-info { width: 300px; min-width: 300px; }
-            .timeline-header { padding-left: 300px; }
+            .gantt-info { width: 120px; min-width: 120px; }
+            .timeline-header { padding-left: 120px; }
         }
         @media (max-width: 768px) {
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
             .calendar-grid { grid-template-columns: repeat(2, 1fr); }
         }
+        
+        /* ===== MAPA DE VOOS ===== */
+        .map-section {
+            margin-top: 25px; background: #1e293b; border-radius: 16px;
+            padding: 20px; border: 1px solid #334155;
+        }
+        .map-section-title {
+            font-size: 1.2rem; font-weight: 700; margin-bottom: 15px;
+            display: flex; align-items: center; gap: 15px; flex-wrap: wrap;
+        }
+        .map-day-selector {
+            display: flex; gap: 8px; align-items: center;
+        }
+        .map-day-btn {
+            background: #334155; border: 2px solid #475569; color: #e2e8f0;
+            padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 0.85rem;
+        }
+        .map-day-btn:hover { background: #475569; }
+        .map-day-btn.active { background: #1e40af; border-color: #3b82f6; }
+        #flight-map { height: 480px; border-radius: 12px; background: #0f172a; }
+        .leaflet-container { font-family: inherit; }
+        .arrow-icon { background: none !important; border: none !important; }
     </style>
 </head>
 <body>
     <div class="container" id="main-container">
-        <div class="header">Atualizado em {{ data_atualizacao }}</div>
+        <div class="header">Atualizado em {{ data_atualizacao }} · Layout v2 (pop-up nos blocos)</div>
         
         <div class="legend">
             {% for prefixo, info in helicopteros.items() %}
@@ -601,8 +954,9 @@ HTML_TEMPLATE = '''
             <button class="filter-btn" data-filter="PR-OMH" onclick="toggleFilter('PR-OMH')" style="border-color:#10B981;">PR-OMH</button>
             <button class="filter-btn" data-filter="PR-OOE" onclick="toggleFilter('PR-OOE')" style="border-color:#F59E0B;">PR-OOE</button>
             <div class="filter-separator"></div>
-            <button class="filter-btn" data-filter="shuttle" onclick="toggleFilter('shuttle')">Shuttle</button>
-            <button class="filter-btn" data-filter="charter" onclick="toggleFilter('charter')">Charter</button>
+            <button class="filter-btn" data-filter="shuttle" onclick="toggleFilter('shuttle')" style="border-color:#7c3aed;">Shuttle</button>
+            <button class="filter-btn" data-filter="fullcabin" onclick="toggleFilter('fullcabin')" style="border-color:#0891b2;">Full Cabin</button>
+            <button class="filter-btn" data-filter="charter" onclick="toggleFilter('charter')" style="border-color:#2563eb;">Charter</button>
         </div>
         
         <!-- Refresh bar -->
@@ -635,6 +989,16 @@ HTML_TEMPLATE = '''
             
             <div class="calendar-grid" id="calendar-grid"></div>
         </div>
+        
+        <!-- Mapa de Voos do Dia -->
+        <div class="map-section">
+            <div class="map-section-title">
+                <span>Mapa de Voos</span>
+                <div class="map-day-selector" id="map-day-selector"></div>
+            </div>
+            <div id="flight-map"></div>
+            <div id="map-legend" style="display:flex;flex-wrap:wrap;gap:16px;margin-top:12px;padding:8px 4px;"></div>
+        </div>
     </div>
     
     <!-- Modal de Detalhes do Dia -->
@@ -654,8 +1018,20 @@ HTML_TEMPLATE = '''
             
             <div class="modal-legend">
                 <div class="modal-legend-item">
-                    <div class="modal-legend-color voo"></div>
-                    <span>Voo Ocupado</span>
+                    <div class="modal-legend-color" style="background:#2563eb;"></div>
+                    <span>Charter</span>
+                </div>
+                <div class="modal-legend-item">
+                    <div class="modal-legend-color" style="background:#0891b2;"></div>
+                    <span>Full Cabin</span>
+                </div>
+                <div class="modal-legend-item">
+                    <div class="modal-legend-color" style="background:#7c3aed;"></div>
+                    <span>Shuttle Seat</span>
+                </div>
+                <div class="modal-legend-item">
+                    <div class="modal-legend-color" style="background:#6d28d9;"></div>
+                    <span>Shuttle Full Cabin</span>
                 </div>
                 <div class="modal-legend-item">
                     <div class="modal-legend-color retorno"></div>
@@ -667,10 +1043,27 @@ HTML_TEMPLATE = '''
         </div>
     </div>
     
+    <div id="gantt-popup-global" class="gantt-bar-popup" style="display:none;"></div>
+    
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
         let voosPorDia = {{ voos_json|safe }};
         const helicopteros = {{ helicopteros_json|safe }};
+        const helipontos = {{ helipontos_json|safe }};
         const icons = {{ icons_json|safe }};
+        const ROTAER_URL = {{ rotaer_url|tojson }};
+        const ROTAER_PAGE = {{ rotaer_page|tojson }};
+        
+        const TIPO_CORES = {
+            'shuttleseat':     {cor: '#7c3aed', label: 'Shuttle Seat',      badge: 'SHUTTLE SEAT'},
+            'shuttlefullcabin':{cor: '#6d28d9', label: 'Shuttle Full Cabin',badge: 'SHUTTLE FC'},
+            'fullcabin':       {cor: '#0891b2', label: 'Full Cabin',        badge: 'FULL CABIN'},
+            'charter':         {cor: '#2563eb', label: 'Charter',           badge: 'CHARTER'}
+        };
+        function tipoInfo(tipo) {
+            const k = (tipo || '').toLowerCase().replace(/[\s_-]/g, '');
+            return TIPO_CORES[k] || TIPO_CORES['charter'];
+        }
         
         let mesAtual = new Date().getMonth();
         let anoAtual = new Date().getFullYear();
@@ -687,23 +1080,29 @@ HTML_TEMPLATE = '''
         // ===== FILTROS =====
         function matchesFilter(voo) {
             if (activeFilter === 'all') return true;
-            if (activeFilter === 'shuttle') return (voo.tipo || '').toLowerCase().includes('shuttle');
-            if (activeFilter === 'charter') return !(voo.tipo || '').toLowerCase().includes('shuttle');
+            const t = (voo.tipo || '').toLowerCase().replace(/[\s_-]/g, '');
+            if (activeFilter === 'shuttle') return t.includes('shuttle');
+            if (activeFilter === 'fullcabin') return t.includes('fullcabin');
+            if (activeFilter === 'charter') return t === 'charter' || t === '';
             return voo.prefixo === activeFilter;
         }
         
         function toggleFilter(filter) {
             activeFilter = filter;
             document.querySelectorAll('.filter-btn').forEach(b => {
-                b.classList.remove('active', 'active-blue', 'active-green', 'active-orange');
+                b.classList.remove('active', 'active-blue', 'active-green', 'active-orange', 'active-purple', 'active-teal');
             });
             const btn = document.querySelector(`[data-filter="${filter}"]`);
             if (filter === 'PR-OMB') btn.classList.add('active-blue');
             else if (filter === 'PR-OMH') btn.classList.add('active-green');
             else if (filter === 'PR-OOE') btn.classList.add('active-orange');
+            else if (filter === 'shuttle') btn.classList.add('active-purple');
+            else if (filter === 'fullcabin') btn.classList.add('active-teal');
+            else if (filter === 'charter') btn.classList.add('active-blue');
             else btn.classList.add('active');
             renderCalendario();
             renderProximosVoos();
+            if (currentModalDate) abrirModal(currentModalDate);
         }
         
         // ===== PROXIMOS VOOS =====
@@ -737,10 +1136,8 @@ HTML_TEMPLATE = '''
                 const amanha = new Date(now); amanha.setDate(amanha.getDate() + 1);
                 const isAmanha = dataObj.toDateString() === amanha.toDateString();
                 const dataLabel = isHoje ? 'HOJE' : isAmanha ? 'AMANHA' : `${dataObj.getDate()}/${dataObj.getMonth()+1}`;
-                const tipoLower = (voo.tipo || '').toLowerCase();
-                const badge = tipoLower.includes('shuttle') 
-                    ? '<span class="nf-badge shuttle">SHUTTLE</span>' 
-                    : '<span class="nf-badge charter">CHARTER</span>';
+                const tiNf = tipoInfo(voo.tipo);
+                const badge = `<span class="nf-badge" style="background:${tiNf.cor};color:#fff;">${tiNf.badge}</span>`;
                 
                 return `
                 <div class="nf-card" style="border-left-color:${cor};" onclick="abrirModal('${voo._date}')">
@@ -777,30 +1174,36 @@ HTML_TEMPLATE = '''
                 const voosDia = (voosPorDia[dataStr] || []).filter(v => matchesFilter(v));
                 
                 const isHoje = (dia === hoje.getDate() && mesAtual === hoje.getMonth() && anoAtual === hoje.getFullYear());
+                const dataCell = new Date(anoAtual, mesAtual, dia);
+                const isPast = dataCell < new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate());
                 const classeHoje = isHoje ? ' today' : '';
+                const classePast = isPast ? ' past' : '';
                 
-                html += `<div class="day-cell${classeHoje}" onclick="abrirModal('${dataStr}')" style="position:relative;">`;
+                html += `<div class="day-cell${classeHoje}${classePast}" onclick="abrirModal('${dataStr}')" style="position:relative;">`;
                 html += `<div class="day-number">${dia}</div>`;
                 html += '<div class="flights-list">';
                 
-                const voosReais = voosDia.filter(v => !v.is_retorno);
+                const mergedDia = agruparPorMissao(voosDia);
+                const voosReais = mergedDia.filter(v => !v.is_retorno);
                 
                 voosReais.slice(0, 6).forEach(voo => {
                     const icon = icons[voo.prefixo] || '';
                     const inicio = new Date(voo.inicio);
                     const hora = inicio.toTimeString().slice(0, 5);
-                    const rota = `${voo.origem}-${voo.destino}`;
+                    const rotaLabel = voo._rotaFull || `${voo.origem}-${voo.destino}`;
                     const durMin = voo.duracao_min;
+                    const tiCal = tipoInfo(voo.tipo);
                     
                     html += `
-                    <div class="flight-item">
+                    <div class="flight-item" style="border-left: 3px solid ${tiCal.cor};">
                         <img class="flight-icon" src="${icon}" alt="${voo.prefixo}">
                         <span class="flight-time">${hora}</span>
-                        <span class="flight-route">${rota}</span>
+                        <span class="flight-route">${rotaLabel}</span>
                         <div class="flight-tooltip">
-                            <strong>${voo.prefixo}</strong><br>
+                            <strong>${voo.prefixo}</strong> · <span style="color:${tiCal.cor};font-weight:600;">${tiCal.badge}</span><br>
                             ${voo.origem_nome} → ${voo.destino_nome}<br>
-                            ${hora} - ${durMin}min · ${voo.passageiros} pax
+                            ${hora} - ${durMin}min · ${voo.passageiros || 0} pax
+                            ${voo._numLegs > 1 ? '<br><span style="color:#94a3b8;">' + voo._numLegs + ' trechos</span>' : ''}
                             ${voo.retorno_info ? '<br><span style="color:#eab308;">+ Retorno estimado</span>' : ''}
                         </div>
                     </div>`;
@@ -816,7 +1219,7 @@ HTML_TEMPLATE = '''
                         if (!aeronaves[v.prefixo]) aeronaves[v.prefixo] = 0;
                         aeronaves[v.prefixo]++;
                     });
-                    let snap = `<div class="day-tooltip"><strong>${voosReais.length} voo(s)</strong><br>`;
+                    let snap = `<div class="day-tooltip"><strong>${voosReais.length} missao(oes)</strong><br>`;
                     Object.entries(aeronaves).forEach(([pref, count]) => {
                         const cor = helicopteros[pref]?.cor || '#fff';
                         snap += `<span style="color:${cor};">${pref}: ${count}</span><br>`;
@@ -829,6 +1232,63 @@ HTML_TEMPLATE = '''
             }
             
             grid.innerHTML = html;
+        }
+        
+        function agruparPorMissao(voosDia) {
+            const grupos = {};
+            const retornos = [];
+            voosDia.forEach(v => {
+                if (v.is_retorno) { retornos.push(v); return; }
+                const chave = v.name || v.inicio;
+                if (!grupos[chave]) grupos[chave] = [];
+                grupos[chave].push(v);
+            });
+            const merged = [];
+            Object.values(grupos).forEach(legs => {
+                legs.sort((a, b) => new Date(a.inicio) - new Date(b.inicio));
+                const first = legs[0];
+                const last = legs[legs.length - 1];
+                const iniDt = new Date(first.inicio);
+                const fimDt = new Date(last.fim);
+                const icaos = [legs[0].origem];
+                legs.forEach(l => icaos.push(l.destino));
+                const rotaFull = icaos.join('-');
+                const paxTotal = legs.reduce((s, l) => s + (l.passageiros || 0), 0);
+                const durTotal = Math.round((fimDt - iniDt) / 60000);
+                const trechosList = legs.map(l => `${l.origem_nome} → ${l.destino_nome}`);
+                merged.push({
+                    ...first,
+                    inicio: first.inicio,
+                    fim: last.fim,
+                    origem: first.origem,
+                    destino: last.destino,
+                    origem_nome: first.origem_nome,
+                    destino_nome: last.destino_nome,
+                    passageiros: paxTotal,
+                    duracao_min: durTotal,
+                    _rotaFull: rotaFull,
+                    _trechosList: trechosList,
+                    _numLegs: legs.length,
+                    retorno_info: last.retorno_info
+                });
+            });
+            retornos.forEach(r => {
+                const chaveRet = Object.keys(grupos).find(k => {
+                    const legs = grupos[k];
+                    return legs[0].prefixo === r.prefixo && Math.abs(new Date(legs[legs.length-1].fim) - new Date(r.inicio)) < 1800000;
+                });
+                if (chaveRet) {
+                    const m = merged.find(x => x.name === chaveRet || x.inicio === chaveRet);
+                    if (m && !m.retorno_info) m.retorno_info = r.retorno_info || {
+                        inicio: r.inicio, fim: r.fim, duracao_min: r.duracao_min,
+                        origem: r.origem, destino: r.destino,
+                        origem_nome: r.origem_nome, destino_nome: r.destino_nome
+                    };
+                } else {
+                    merged.push(r);
+                }
+            });
+            return merged;
         }
         
         function mudarMes(delta) {
@@ -859,12 +1319,13 @@ HTML_TEMPLATE = '''
             const mesNome = mesesNome[dataObj.getMonth()];
             const ano = dataObj.getFullYear();
             
+            const mergedVoos = agruparPorMissao(voos);
+            const voosReais = mergedVoos.filter(v => !v.is_retorno);
             titulo.textContent = `${diaSemana}, ${diaNum} de ${mesNome} de ${ano}`;
-            subtitulo.textContent = `${voos.length} voo(s) programado(s)`;
+            subtitulo.textContent = `${voosReais.length} missao(oes) · 3 aeronaves`;
             
-            if (voos.length === 0) {
-                body.innerHTML = '<div class="no-flights">Nenhum voo programado para este dia</div>';
-            } else {
+            {
+                const AERONAVES = ['PR-OMB', 'PR-OMH', 'PR-OOE'];
                 let html = '';
                 
                 html += '<div class="timeline-header"><div class="timeline-hours">';
@@ -873,82 +1334,164 @@ HTML_TEMPLATE = '''
                 }
                 html += '</div></div>';
                 
-                voos.forEach(voo => {
-                    const cor = helicopteros[voo.prefixo]?.cor || '#666';
-                    const icon = icons[voo.prefixo] || '';
-                    const inicio = new Date(voo.inicio);
-                    const fim = new Date(voo.fim);
-                    const horaInicio = inicio.toTimeString().slice(0, 5);
-                    const horaFim = fim.toTimeString().slice(0, 5);
+                AERONAVES.forEach(prefixo => {
+                    const cor = helicopteros[prefixo]?.cor || '#666';
+                    const icon = icons[prefixo] || '';
+                    const voosAeronave = mergedVoos.filter(v => v.prefixo === prefixo);
                     
-                    const statusTag = voo.is_pago 
-                        ? '<span class="gantt-status-tag pago">PAGO</span>'
-                        : '<span class="gantt-status-tag pendente">PGTO PENDENTE</span>';
-                    
-                    const tipoLower = (voo.tipo || '').toLowerCase();
-                    let tipoTag = '';
-                    if (tipoLower.includes('shuttle')) {
-                        tipoTag = '<span class="gantt-tipo-tag shuttle">SHUTTLE</span>';
-                    } else if (tipoLower.includes('charter')) {
-                        tipoTag = '<span class="gantt-tipo-tag charter">CHARTER</span>';
-                    } else if (voo.tipo) {
-                        tipoTag = `<span class="gantt-tipo-tag other">${voo.tipo.toUpperCase()}</span>`;
-                    }
-                    
-                    const startHour = inicio.getHours() + inicio.getMinutes() / 60;
-                    const endHour = fim.getHours() + fim.getMinutes() / 60;
-                    const leftPercent = Math.max(0, ((startHour - 5) / 18) * 100);
-                    const vooEndPercent = Math.max(0, ((endHour - 5) / 18) * 100);
-                    const rawWidth = vooEndPercent - leftPercent;
-                    const vooWidth = Math.max(rawWidth, 3);
-                    const vooVisualEnd = leftPercent + vooWidth;
-                    
-                    let retornoBar = '';
-                    if (voo.retorno_info) {
-                        const retFim = new Date(voo.retorno_info.fim);
-                        const retEndHour = retFim.getHours() + retFim.getMinutes() / 60;
-                        const retEndPercent = Math.min(100, ((retEndHour - 5) / 18) * 100);
-                        const retLeftPercent = vooVisualEnd;
-                        const retWidthPercent = Math.max(retEndPercent - retLeftPercent, 2);
-                        
-                        if (retEndPercent > retLeftPercent) {
-                            retornoBar = `<div class="gantt-bar retorno" style="left: ${retLeftPercent}%; width: ${retWidthPercent}%;"></div>`;
+                    const blocks = [];
+                    voosAeronave.forEach(voo => {
+                        if (voo.is_retorno) return;
+                        const iniVoo = new Date(voo.inicio);
+                        const fimVoo = new Date(voo.fim);
+                        const horaIni = iniVoo.toTimeString().slice(0, 5);
+                        const horaFim = fimVoo.toTimeString().slice(0, 5);
+                        const ti = tipoInfo(voo.tipo);
+                        const rotaLabel = voo._rotaFull || (voo.origem + '-' + voo.destino);
+                        blocks.push({
+                            inicio: iniVoo, fim: fimVoo,
+                            rota: rotaLabel,
+                            origem: voo.origem, destino: voo.destino,
+                            origemNome: voo.origem_nome || voo.origem,
+                            destinoNome: voo.destino_nome || voo.destino,
+                            pax: voo.passageiros || 0,
+                            isRetorno: false, corAeronave: cor, corTipo: ti.cor,
+                            name: voo.name || '', tipo: ti.label, tipoBadge: ti.badge, tipoRaw: voo.tipo,
+                            isPago: voo.is_pago, duracaoMin: voo.duracao_min,
+                            horaInicio: horaIni, horaFim: horaFim,
+                            fonte: voo.fonte || 'voo',
+                            _trechosList: voo._trechosList || [`${voo.origem_nome} → ${voo.destino_nome}`],
+                            _numLegs: voo._numLegs || 1
+                        });
+                        const parentIdx = blocks.length - 1;
+                        if (voo.retorno_info) {
+                            const ret = voo.retorno_info;
+                            blocks.push({
+                                inicio: new Date(ret.inicio), fim: new Date(ret.fim),
+                                rota: ret.origem + '-' + ret.destino,
+                                origem: ret.origem, destino: ret.destino,
+                                origemNome: ret.origem_nome || ret.origem,
+                                destinoNome: ret.destino_nome || ret.destino,
+                                pax: 0, isRetorno: true, corAeronave: cor,
+                                duracaoMin: ret.duracao_min,
+                                horaInicio: new Date(ret.inicio).toTimeString().slice(0, 5),
+                                horaFim: new Date(ret.fim).toTimeString().slice(0, 5),
+                                fonte: 'voo',
+                                _parentIdx: parentIdx
+                            });
                         }
-                    }
+                    });
+                    // Guardar indice original antes de ordenar
+                    blocks.forEach((bl, i) => bl._origIdx = i);
+                    blocks.sort((a, b) => a.inicio - b.inicio);
+                    
+                    // Detectar sobreposicoes e atribuir lanes (retorno herda lane do pai)
+                    const laneEnds = [];
+                    const origLaneMap = {};
+                    blocks.forEach(bl => {
+                        if (bl.isRetorno && bl._parentIdx !== undefined && origLaneMap[bl._parentIdx] !== undefined) {
+                            bl._lane = origLaneMap[bl._parentIdx];
+                            laneEnds[bl._lane] = Math.max(laneEnds[bl._lane] || 0, bl.fim.getTime());
+                        } else {
+                            const s = bl.inicio.getTime();
+                            const e = bl.fim.getTime();
+                            let lane = 0;
+                            for (lane = 0; lane < laneEnds.length; lane++) {
+                                if (s >= (laneEnds[lane] || 0)) break;
+                            }
+                            bl._lane = lane;
+                            laneEnds[lane] = e;
+                        }
+                        origLaneMap[bl._origIdx] = bl._lane;
+                    });
+                    const maxLanes = Math.max(1, laneEnds.length);
+                    const rowH = maxLanes > 1 ? (maxLanes * 28 + 8) : 48;
+                    
+                    let barsHtml = '<div class="gantt-grid-lines">' + Array(18).fill('<div class="gantt-grid-line"></div>').join('') + '</div>';
+                    blocks.forEach(bl => {
+                        const startHour = bl.inicio.getHours() + bl.inicio.getMinutes() / 60;
+                        const endHour = bl.fim.getHours() + bl.fim.getMinutes() / 60;
+                        const leftPercent = Math.max(0, ((startHour - 5) / 18) * 100);
+                        const endPercent = Math.min(100, ((endHour - 5) / 18) * 100);
+                        const width = Math.max(endPercent - leftPercent, 2);
+                        const barClass = bl.isRetorno ? 'retorno' : 'voo';
+                        const barBg = bl.isRetorno ? '' : `background: ${bl.corTipo}; border-left: 3px solid ${cor};`;
+                        const laneTop = maxLanes > 1 ? (4 + bl._lane * 28) : 4;
+                        const laneH = maxLanes > 1 ? 24 : 'calc(100% - 8px)';
+                        const barStyle = `left: ${leftPercent}%; width: ${width}%; top: ${laneTop}px; height: ${typeof laneH === 'number' ? laneH + 'px' : laneH}; ${barBg}`;
+                        const paxText = bl.isRetorno ? 'RET' : (bl.pax + ' pax');
+                        const linkIfUnknown = (cod, nome) => helipontos[cod] ? nome : `<a href="${ROTAER_URL}${cod}" target="_blank" rel="noopener" title="Consultar no ROTAER (AISWEB)">${nome}</a>`;
+                        const origLink = linkIfUnknown(bl.origem, bl.origemNome);
+                        const destLink = linkIfUnknown(bl.destino, bl.destinoNome);
+                        const hasUnknown = !helipontos[bl.origem] || !helipontos[bl.destino];
+                        const rotaerHint = hasUnknown ? `<div class="gantt-bar-popup-row"><span class="gantt-bar-popup-label"></span><span class="gantt-bar-popup-value" style="font-size:0.8rem;color:#94a3b8;"><a href="${ROTAER_PAGE}" target="_blank" rel="noopener">ROTAER (AISWEB)</a></span></div>` : '';
+                        let popupHtml = '';
+                        if (bl.isRetorno) {
+                            popupHtml = `<div class="gantt-bar-popup">
+                                <div class="gantt-bar-popup-title" style="color:#eab308;">Retorno (Empty Leg)</div>
+                                <div class="gantt-bar-popup-row"><span class="gantt-bar-popup-label">Rota:</span><span class="gantt-bar-popup-value">${origLink} → ${destLink}</span></div>
+                                <div class="gantt-bar-popup-row"><span class="gantt-bar-popup-label">Horário:</span><span class="gantt-bar-popup-value">${bl.horaInicio} - ${bl.horaFim}</span></div>
+                                <div class="gantt-bar-popup-row"><span class="gantt-bar-popup-label">Duração:</span><span class="gantt-bar-popup-value">${bl.duracaoMin} min</span></div>
+                                ${rotaerHint}
+                            </div>`;
+                        } else {
+                            const statusText = bl.isPago ? 'PAGO' : 'Pgto. pendente';
+                            const tipoBadgeHtml = `<span style="display:inline-block;background:${bl.corTipo};color:#fff;font-size:0.7rem;font-weight:700;padding:2px 8px;border-radius:4px;">${bl.tipoBadge}</span>`;
+                            const trechosHtml = (bl._trechosList || []).map(t => `<div style="font-size:0.85rem;color:#cbd5e1;padding-left:10px;">• ${t}</div>`).join('');
+                            popupHtml = `<div class="gantt-bar-popup" style="border-left:4px solid ${bl.corTipo};">
+                                <div class="gantt-bar-popup-title" style="color:${cor};">${bl.rota} <span style="float:right;">${tipoBadgeHtml}</span></div>
+                                <div class="gantt-bar-popup-row"><span class="gantt-bar-popup-label">Horário:</span><span class="gantt-bar-popup-value">${bl.horaInicio} - ${bl.horaFim}</span></div>
+                                <div class="gantt-bar-popup-row"><span class="gantt-bar-popup-label">Duração:</span><span class="gantt-bar-popup-value">${bl.duracaoMin} min</span></div>
+                                <div class="gantt-bar-popup-row"><span class="gantt-bar-popup-label">Passageiros:</span><span class="gantt-bar-popup-value">${bl.pax} pax</span></div>
+                                ${bl._numLegs > 1 ? '<div class="gantt-bar-popup-row"><span class="gantt-bar-popup-label">Pernas:</span><span class="gantt-bar-popup-value">' + bl._numLegs + ' trechos</span></div>' : ''}
+                                ${bl._numLegs > 1 ? '<div style="margin:6px 0 4px;">' + trechosHtml + '</div>' : ''}
+                                <div class="gantt-bar-popup-row"><span class="gantt-bar-popup-label">Tipo:</span><span class="gantt-bar-popup-value">${bl.tipo}</span></div>
+                                <div class="gantt-bar-popup-row"><span class="gantt-bar-popup-label">Status:</span><span class="gantt-bar-popup-value">${statusText}</span></div>
+                                ${bl.name ? '<div class="gantt-bar-popup-row"><span class="gantt-bar-popup-label">Ref:</span><span class="gantt-bar-popup-value">' + bl.name + '</span></div>' : ''}
+                                ${bl.fonte === 'trecho' ? '<div class="gantt-bar-popup-row"><span class="gantt-bar-popup-label"></span><span class="gantt-bar-popup-value" style="font-size:0.75rem;color:#10b981;">Dados do Trecho (cadastrado)</span></div>' : ''}
+                                ${rotaerHint}
+                            </div>`;
+                        }
+                        barsHtml += `<div class="gantt-bar ${barClass}" style="${barStyle}">
+                            <span class="gantt-bar-route">${bl.rota}</span>
+                            <span class="gantt-bar-pax">${paxText}</span>
+                            ${popupHtml}
+                        </div>`;
+                    });
                     
                     html += `
-                    <div class="gantt-row">
+                    <div class="gantt-row" style="height:${rowH}px;">
                         <div class="gantt-info">
-                            <div class="gantt-info-header">
-                                <img class="gantt-info-icon" src="${icon}" alt="${voo.prefixo}" style="width:40px;height:40px;">
-                                <div>
-                                    <span class="gantt-info-ref" style="color: ${cor};font-weight:700;">${voo.prefixo}</span>
-                                    <span class="gantt-info-ref" style="color: #94a3b8;font-size:0.75rem;">${voo.name || 'N/A'}</span>
-                                    ${tipoTag}
-                                    ${statusTag}
-                                </div>
-                            </div>
-                            <div class="gantt-info-details">
-                                Pax: <span>${voo.passageiros}</span> · 
-                                <span>${horaInicio} - ${horaFim}</span> · 
-                                <span>${voo.duracao_min}min</span>
-                            </div>
-                            <div class="gantt-info-rota">
-                                <strong>${voo.origem_nome}</strong> (${voo.origem})<br>
-                                ↓ <strong>${voo.destino_nome}</strong> (${voo.destino})
-                            </div>
+                            <img class="gantt-info-icon" src="${icon}" alt="${prefixo}">
+                            <span class="gantt-info-ref" style="color: ${cor};">${prefixo}</span>
                         </div>
-                        <div class="gantt-timeline">
-                            <div class="gantt-grid-lines">
-                                ${Array(18).fill('<div class="gantt-grid-line"></div>').join('')}
-                            </div>
-                            <div class="gantt-bar voo" style="left: ${leftPercent}%; width: ${vooWidth}%;"></div>
-                            ${retornoBar}
-                        </div>
+                        <div class="gantt-timeline" style="height:${rowH}px;">${barsHtml}</div>
                     </div>`;
                 });
                 
                 body.innerHTML = html;
+                
+                const globalPopup = document.getElementById('gantt-popup-global');
+                document.querySelectorAll('.gantt-bar').forEach(bar => {
+                    const popup = bar.querySelector('.gantt-bar-popup');
+                    if (!popup) return;
+                    bar.addEventListener('mouseenter', function() {
+                        globalPopup.innerHTML = popup.innerHTML;
+                        globalPopup.style.display = 'block';
+                        globalPopup.style.borderLeft = popup.style.borderLeft || '';
+                        const barRect = bar.getBoundingClientRect();
+                        let left = barRect.right + 12;
+                        let top = barRect.top + 8;
+                        if (left + 380 > window.innerWidth) left = barRect.left - 380 - 12;
+                        if (top < 10) top = 10;
+                        if (top + 200 > window.innerHeight - 10) top = window.innerHeight - 220;
+                        globalPopup.style.left = left + 'px';
+                        globalPopup.style.top = top + 'px';
+                    });
+                    bar.addEventListener('mouseleave', function() {
+                        globalPopup.style.display = 'none';
+                    });
+                });
             }
             
             modal.classList.add('active');
@@ -994,6 +1537,8 @@ HTML_TEMPLATE = '''
                     voosPorDia = data.voos;
                     renderCalendario();
                     renderProximosVoos();
+                    renderMapDaySelector();
+                    if (flightMap && mapSelectedDate) renderMapaVoos(mapSelectedDate);
                     text.textContent = `Atualizado em ${data.atualizado_em}`;
                 }
                 spinner.classList.remove('active');
@@ -1005,9 +1550,199 @@ HTML_TEMPLATE = '''
         // Refresh a cada 2 min
         setInterval(autoRefresh, 120000);
         
+        // ===== MAPA DE VOOS =====
+        let flightMap = null;
+        let mapLayers = [];
+        let mapSelectedDate = null;
+        
+        function offsetLatLng(lat, lon, dx, dy) {
+            const earth = 6371000;
+            const dLat = (dy / earth) * (180 / Math.PI);
+            const dLon = (dx / (earth * Math.cos(lat * Math.PI / 180))) * (180 / Math.PI);
+            return [lat + dLat, lon + dLon];
+        }
+        
+        function perpendicularOffset(a, b, offsetMeters) {
+            const midLat = (a[0] + b[0]) / 2;
+            const midLon = (a[1] + b[1]) / 2;
+            const bearing = Math.atan2(b[1] - a[1], (b[0] - a[0]) * Math.cos(midLat * Math.PI / 180));
+            const perpBearing = bearing + Math.PI / 2;
+            const dx = offsetMeters * Math.sin(perpBearing);
+            const dy = offsetMeters * Math.cos(perpBearing);
+            return [offsetLatLng(a[0], a[1], dx, dy), offsetLatLng(b[0], b[1], dx, dy)];
+        }
+        
+        function createArrowIcon(color, bearingDeg) {
+            return L.divIcon({
+                html: `<div style="transform:rotate(${bearingDeg}deg);line-height:0"><svg width="14" height="14" viewBox="0 0 16 16"><polygon fill="${color}" stroke="#0f172a" stroke-width="1" points="2,3 16,8 2,13 6,8"/></svg></div>`,
+                className: 'arrow-icon',
+                iconSize: [14, 14],
+                iconAnchor: [7, 7]
+            });
+        }
+        
+        function renderMapaVoos(dataStr) {
+            if (!flightMap) return;
+            mapLayers.forEach(l => flightMap.removeLayer(l));
+            mapLayers = [];
+            
+            const voos = (voosPorDia[dataStr] || []).filter(v => !v.is_retorno && matchesFilter(v));
+            const routeCount = {};
+            const legs = [];
+            
+            function addLeg(origem, destino, vooRef, isRetorno) {
+                const orig = helipontos[origem];
+                const dest = helipontos[destino];
+                if (!orig || !dest || origem === destino) return;
+                const key = origem + '-' + destino;
+                routeCount[key] = (routeCount[key] || 0) + 1;
+                legs.push({ voo: vooRef, orig, dest, key, idx: routeCount[key] - 1, isRetorno });
+            }
+            
+            voos.forEach(voo => {
+                addLeg(voo.origem, voo.destino, voo, false);
+                if (voo.retorno_info) {
+                    addLeg(voo.retorno_info.origem, voo.retorno_info.destino, { ...voo, prefixo: voo.prefixo, origem_nome: voo.retorno_info.origem_nome, destino_nome: voo.retorno_info.destino_nome, passageiros: 0 }, true);
+                }
+            });
+            
+            const totalPerRoute = {};
+            legs.forEach(l => { totalPerRoute[l.key] = (totalPerRoute[l.key] || 0) + 1; });
+            
+            const usedTipos = new Set();
+            const usedAeronaves = new Set();
+            legs.forEach(({ voo, orig, dest, idx, key, isRetorno }) => {
+                const total = totalPerRoute[key];
+                const offsetIdx = total > 1 ? (idx - (total - 1) / 2) : 0;
+                const offsetM = offsetIdx * 180;
+                
+                let a = [orig.lat, orig.lon];
+                let b = [dest.lat, dest.lon];
+                if (offsetM !== 0) {
+                    [a, b] = perpendicularOffset(a, b, offsetM);
+                }
+                
+                const ti = tipoInfo(voo.tipo);
+                const corAeronave = helicopteros[voo.prefixo]?.cor || '#666';
+                const cor = isRetorno ? '#eab308' : ti.cor;
+                const dashArray = isRetorno ? '8, 8' : null;
+                const line = L.polyline([a, b], { color: cor, weight: 4, opacity: 0.9, dashArray: dashArray });
+                line.addTo(flightMap);
+                mapLayers.push(line);
+                
+                if (!isRetorno) { usedTipos.add(ti.label); usedAeronaves.add(voo.prefixo); }
+                
+                const tooltip = isRetorno 
+                    ? `${voo.prefixo} RET: ${voo.origem_nome} → ${voo.destino_nome}` 
+                    : `${voo.prefixo}: ${voo.origem_nome} → ${voo.destino_nome} (${voo.passageiros} pax) · ${ti.badge}`;
+                line.bindTooltip(tooltip, { permanent: false, direction: 'top' });
+                
+                const bearing = Math.atan2(b[1] - a[1], (b[0] - a[0]) * Math.cos(b[0] * Math.PI / 180)) * 180 / Math.PI;
+                const arrowIcon = createArrowIcon(cor, bearing);
+                const arrow = L.marker(b, { icon: arrowIcon }).addTo(flightMap);
+                mapLayers.push(arrow);
+            });
+            
+            // Legenda do mapa
+            const legendEl = document.getElementById('map-legend');
+            let legHtml = '<span style="color:#94a3b8;font-size:0.8rem;font-weight:600;">TIPO:</span>';
+            Object.values(TIPO_CORES).forEach(t => {
+                const used = usedTipos.has(t.label);
+                legHtml += `<div style="display:flex;align-items:center;gap:6px;opacity:${used ? 1 : 0.35};">
+                    <div style="width:24px;height:4px;background:${t.cor};border-radius:2px;"></div>
+                    <span style="font-size:0.78rem;color:#e2e8f0;">${t.label}</span>
+                </div>`;
+            });
+            legHtml += `<div style="display:flex;align-items:center;gap:6px;">
+                <div style="width:24px;height:4px;background:#eab308;border-radius:2px;border:1px dashed #eab308;"></div>
+                <span style="font-size:0.78rem;color:#eab308;">Retorno</span>
+            </div>`;
+            legHtml += '<span style="color:#94a3b8;font-size:0.8rem;font-weight:600;margin-left:12px;">AERONAVE:</span>';
+            ['PR-OMB','PR-OMH','PR-OOE'].forEach(p => {
+                const c = helicopteros[p]?.cor || '#666';
+                const used = usedAeronaves.has(p);
+                legHtml += `<div style="display:flex;align-items:center;gap:6px;opacity:${used ? 1 : 0.35};">
+                    <div style="width:10px;height:10px;border-radius:50%;background:${c};border:2px solid #fff;"></div>
+                    <span style="font-size:0.78rem;color:${c};font-weight:600;">${p}</span>
+                </div>`;
+            });
+            legHtml += `<div style="display:flex;align-items:center;gap:6px;">
+                <div style="width:10px;height:10px;border-radius:50%;background:#22c55e;border:2px solid #fff;"></div>
+                <span style="font-size:0.78rem;color:#e2e8f0;">Heliponto</span>
+            </div>`;
+            legendEl.innerHTML = legHtml;
+            
+            const usedHelipontos = new Set();
+            voos.forEach(v => { usedHelipontos.add(v.origem); usedHelipontos.add(v.destino); });
+            
+            usedHelipontos.forEach(icao => {
+                const h = helipontos[icao];
+                if (!h) return;
+                const marker = L.circleMarker([h.lat, h.lon], {
+                    radius: 9,
+                    fillColor: '#22c55e',
+                    color: '#fff',
+                    weight: 2,
+                    fillOpacity: 0.95
+                }).addTo(flightMap);
+                marker.bindTooltip(`<strong>${icao}</strong><br>${h.nome}`, { permanent: false, direction: 'top' });
+                mapLayers.push(marker);
+            });
+            
+            const allLat = legs.flatMap(l => [l.orig.lat, l.dest.lat]);
+            const allLon = legs.flatMap(l => [l.orig.lon, l.dest.lon]);
+            if (allLat.length && allLon.length) {
+                const bounds = L.latLngBounds(
+                    [Math.min(...allLat) - 0.08, Math.min(...allLon) - 0.08],
+                    [Math.max(...allLat) + 0.08, Math.max(...allLon) + 0.08]
+                );
+                flightMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 11 });
+            } else {
+                flightMap.setView([-23.55, -46.64], 9);
+            }
+        }
+        
+        function renderMapDaySelector() {
+            const sel = document.getElementById('map-day-selector');
+            const days = [];
+            const today = new Date();
+            for (let i = 0; i < 14; i++) {
+                const d = new Date(today);
+                d.setDate(d.getDate() + i);
+                const ds = d.toISOString().slice(0, 10);
+                const hasVoos = voosPorDia[ds] && voosPorDia[ds].filter(v => !v.is_retorno).length > 0;
+                days.push({ date: ds, label: i === 0 ? 'Hoje' : (i === 1 ? 'Amanha' : `${d.getDate()}/${d.getMonth()+1}`), hasVoos });
+            }
+            const initialDate = mapSelectedDate || days[0].date;
+            mapSelectedDate = initialDate;
+            sel.innerHTML = days.map(({ date, label, hasVoos }) => 
+                `<button class="map-day-btn ${date === initialDate ? 'active' : ''}" onclick="selectMapDay('${date}')" data-date="${date}">${label}${hasVoos ? '' : ' (−)'}</button>`
+            ).join('');
+        }
+        
+        function selectMapDay(date) {
+            mapSelectedDate = date;
+            document.querySelectorAll('.map-day-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.date === date);
+            });
+            renderMapaVoos(date);
+        }
+        
+        function initMap() {
+            if (flightMap) return;
+            flightMap = L.map('flight-map', { attributionControl: false }).setView([-23.55, -46.64], 9);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19
+            }).addTo(flightMap);
+            mapLayers = [];
+            renderMapDaySelector();
+            renderMapaVoos(mapSelectedDate || new Date().toISOString().slice(0, 10));
+        }
+        
         document.addEventListener('DOMContentLoaded', () => {
             renderCalendario();
             renderProximosVoos();
+            setTimeout(initMap, 100);
         });
     </script>
 </body>
@@ -1036,7 +1771,8 @@ def _serialize_voos(voos_por_dia):
                 'passageiros': v['passageiros'],
                 'name': v['name'],
                 'is_retorno': v['is_retorno'],
-                'retorno_info': None
+                'retorno_info': None,
+                'fonte': v.get('fonte', 'voo')
             }
             if v['retorno_info']:
                 voo_dict['retorno_info'] = {
@@ -1052,8 +1788,24 @@ def _serialize_voos(voos_por_dia):
     return voos_json
 
 
+def _merge_voos_e_stats(vpd_t, st_t, vpd_v, st_v):
+    """Mescla dados de trechos + voos."""
+    for data, lista in vpd_v.items():
+        vpd_t.setdefault(data, []).extend(lista)
+    for data in vpd_t:
+        vpd_t[data].sort(key=lambda x: x['inicio'])
+    st_t['total_voos'] += st_v['total_voos']
+    st_t['total_retornos'] += st_v['total_retornos']
+    st_t['total_horas'] += st_v['total_horas']
+    st_t['total_shuttle'] += st_v['total_shuttle']
+    st_t['total_charter'] += st_v['total_charter']
+    for k in st_t['por_aeronave']:
+        st_t['por_aeronave'][k] += st_v['por_aeronave'].get(k, 0)
+    return vpd_t, st_t
+
+
 def _get_cached_data():
-    """Busca dados com cache de 2 minutos"""
+    """Busca dados com cache de 2 minutos. Prioriza Trecho__c (dados reais), fallback em Voo__c."""
     now = time.time()
     with _cache_lock:
         if _cache['data'] and (now - _cache['timestamp']) < CACHE_TTL:
@@ -1064,7 +1816,15 @@ def _get_cached_data():
         return None, None, None
     
     voos = buscar_voos(sf)
-    voos_por_dia, stats = processar_voos(voos)
+    trechos = buscar_trechos(sf)
+    
+    if trechos:
+        voos_por_dia, stats, voo_ids_com_trechos, retornos_trechos = processar_trechos(trechos)
+        vpd_v, st_v = processar_voos(voos, voo_ids_com_trechos, retornos_trechos)
+        voos_por_dia, stats = _merge_voos_e_stats(voos_por_dia, stats, vpd_v, st_v)
+    else:
+        voos_por_dia, stats = processar_voos(voos)
+    
     voos_json = _serialize_voos(voos_por_dia)
     
     with _cache_lock:
@@ -1097,10 +1857,13 @@ def index():
         voos_json=json.dumps(voos_json),
         helicopteros=HELICOPTEROS,
         helicopteros_json=json.dumps(HELICOPTEROS),
+        helipontos_json=json.dumps(HELIPONTOS),
         icons=ICONS_BASE64,
         icons_json=json.dumps(ICONS_BASE64),
         stats=stats,
-        data_atualizacao=datetime.now().strftime('%d/%m/%Y %H:%M')
+        data_atualizacao=datetime.now().strftime('%d/%m/%Y %H:%M'),
+        rotaer_url=ROTAER_URL,
+        rotaer_page=ROTAER_PAGE
     )
 
 
@@ -1109,7 +1872,7 @@ def api_voos():
     """API para auto-refresh sem recarregar a pagina"""
     voos_por_dia, stats, voos_json = _get_cached_data()
     if voos_json is None:
-        return jsonify({'error': 'Erro ao conectar ao Salesforce'}), 500
+        return jsonify({'error': 'Erro ao conectar ao Salesforce. Verifique as credenciais no arquivo .env'}), 500
     return jsonify({
         'voos': voos_json,
         'stats': stats,
