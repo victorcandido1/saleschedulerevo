@@ -28,7 +28,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # ===== CACHE =====
 _cache = {'data': None, 'stats': None, 'timestamp': 0, 'raw_json': None}
 _cache_lock = threading.Lock()
-CACHE_TTL = 120  # 2 minutos
+CACHE_TTL = 150  # 2 minutos e meio
 
 HELICOPTEROS = {
     'PR-OMB': {'modelo': 'EC155', 'cor': '#3B82F6', 'velocidade_kmh': 259.28},
@@ -1547,8 +1547,8 @@ HTML_TEMPLATE = '''
             }
         }
         
-        // Refresh a cada 2 min
-        setInterval(autoRefresh, 120000);
+        // Refresh a cada 2min30s
+        setInterval(autoRefresh, 150000);
         
         // ===== MAPA DE VOOS =====
         let flightMap = null;
