@@ -20,6 +20,7 @@ import calendar
 from math import radians, cos, sin, asin, sqrt
 import json
 import threading
+import urllib.request
 
 app = Flask(__name__)
 
@@ -29,6 +30,43 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 _cache = {'data': None, 'stats': None, 'timestamp': 0, 'raw_json': None}
 _cache_lock = threading.Lock()
 CACHE_TTL = 150  # 2 minutos e meio
+
+# ===== WEATHER CACHE =====
+_weather_cache = {'data': None, 'timestamp': 0}
+_weather_cache_lock = threading.Lock()
+WEATHER_CACHE_TTL = 1800  # 30 minutos
+
+WMO_CODES = {
+    0:  {'desc': 'Céu limpo',            'icon': '☀️',  'severity': 0},
+    1:  {'desc': 'Predominante limpo',    'icon': '🌤️', 'severity': 0},
+    2:  {'desc': 'Parcialmente nublado',  'icon': '⛅',  'severity': 0},
+    3:  {'desc': 'Nublado',               'icon': '☁️',  'severity': 1},
+    45: {'desc': 'Nevoeiro',              'icon': '🌫️', 'severity': 2},
+    48: {'desc': 'Nevoeiro c/ geada',     'icon': '🌫️', 'severity': 2},
+    51: {'desc': 'Garoa leve',            'icon': '🌦️', 'severity': 1},
+    53: {'desc': 'Garoa moderada',        'icon': '🌦️', 'severity': 1},
+    55: {'desc': 'Garoa intensa',         'icon': '🌧️', 'severity': 2},
+    56: {'desc': 'Garoa congelante',      'icon': '🌧️', 'severity': 2},
+    57: {'desc': 'Garoa congelante forte','icon': '🌧️', 'severity': 3},
+    61: {'desc': 'Chuva leve',            'icon': '🌧️', 'severity': 1},
+    63: {'desc': 'Chuva moderada',        'icon': '🌧️', 'severity': 2},
+    65: {'desc': 'Chuva forte',           'icon': '🌧️', 'severity': 3},
+    66: {'desc': 'Chuva congelante',      'icon': '🌧️', 'severity': 2},
+    67: {'desc': 'Chuva congelante forte','icon': '🌧️', 'severity': 3},
+    71: {'desc': 'Neve leve',             'icon': '🌨️', 'severity': 2},
+    73: {'desc': 'Neve moderada',         'icon': '🌨️', 'severity': 2},
+    75: {'desc': 'Neve forte',            'icon': '🌨️', 'severity': 3},
+    77: {'desc': 'Granizo fino',          'icon': '🌨️', 'severity': 2},
+    80: {'desc': 'Pancadas leves',        'icon': '🌦️', 'severity': 1},
+    81: {'desc': 'Pancadas moderadas',    'icon': '🌧️', 'severity': 2},
+    82: {'desc': 'Pancadas fortes',       'icon': '🌧️', 'severity': 3},
+    85: {'desc': 'Neve em pancadas',      'icon': '🌨️', 'severity': 2},
+    86: {'desc': 'Neve forte pancadas',   'icon': '🌨️', 'severity': 3},
+    95: {'desc': 'Trovoadas',             'icon': '⛈️',  'severity': 3},
+    96: {'desc': 'Trovoadas c/ granizo',  'icon': '⛈️',  'severity': 3},
+    99: {'desc': 'Trovoadas fortes',      'icon': '⛈️',  'severity': 3},
+}
+_WMO_DEFAULT = {'desc': 'Indisponível', 'icon': '❓', 'severity': 0}
 
 HELICOPTEROS = {
     'PR-OMB': {'modelo': 'EC155', 'cor': '#3B82F6', 'velocidade_kmh': 259.28},
@@ -992,6 +1030,174 @@ HTML_TEMPLATE = '''
         #flight-map { height: 480px; border-radius: 12px; background: #0f172a; }
         .leaflet-container { font-family: inherit; }
         .arrow-icon { background: none !important; border: none !important; }
+        
+        /* ===== PREVISÃO DO TEMPO ===== */
+        .weather-section {
+            background: #1e293b; border-radius: 16px; padding: 20px;
+            margin-bottom: 20px; border: 1px solid #334155;
+        }
+        .weather-title {
+            font-size: 1rem; font-weight: 700; color: #94a3b8; margin-bottom: 15px;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .weather-grid {
+            display: flex; gap: 10px; overflow-x: auto; padding-bottom: 5px;
+        }
+        .weather-card {
+            background: #0f172a; border-radius: 10px; padding: 12px 14px;
+            min-width: 120px; flex: 1; text-align: center;
+            border-top: 3px solid #334155; transition: all 0.2s;
+        }
+        .weather-card:hover { transform: translateY(-2px); }
+        .weather-card.clickable { cursor: pointer; }
+        .weather-card.sev-0 { border-top-color: #22c55e; }
+        .weather-card.sev-1 { border-top-color: #38bdf8; }
+        .weather-card.sev-2 { border-top-color: #f59e0b; }
+        .weather-card.sev-3 { border-top-color: #ef4444; }
+        .weather-card-date { font-size: 0.8rem; color: #94a3b8; margin-bottom: 6px; font-weight: 600; }
+        .weather-card-icon { font-size: 1.8rem; margin-bottom: 4px; line-height: 1.2; }
+        .weather-card-temp { font-size: 0.95rem; font-weight: 700; color: #e2e8f0; margin-bottom: 3px; }
+        .weather-card-detail { font-size: 0.72rem; color: #64748b; line-height: 1.5; }
+        .weather-card-desc { font-size: 0.72rem; color: #94a3b8; margin-top: 4px; }
+        .weather-card-flights { font-size: 0.7rem; color: #94a3b8; margin-top: 6px; padding-top: 6px; border-top: 1px solid #334155; }
+        .weather-loading { text-align: center; color: #475569; font-size: 0.85rem; padding: 20px; }
+        .weather-badge-inline {
+            display: inline-flex; align-items: center; gap: 2px;
+            font-size: 0.7rem; padding: 1px 5px; border-radius: 4px;
+            background: rgba(255,255,255,0.04);
+        }
+        .weather-badge-inline.sev-0 { color: #22c55e; }
+        .weather-badge-inline.sev-1 { color: #38bdf8; }
+        .weather-badge-inline.sev-2 { color: #f59e0b; }
+        .weather-badge-inline.sev-3 { color: #ef4444; }
+        .modal-weather-bar {
+            display: flex; gap: 16px; padding: 12px 30px;
+            background: #0f172a; border-bottom: 1px solid #334155;
+            flex-wrap: wrap; align-items: center;
+        }
+        .modal-weather-item {
+            display: flex; align-items: center; gap: 6px;
+            font-size: 0.85rem; color: #e2e8f0;
+        }
+        .modal-weather-label { color: #64748b; font-size: 0.75rem; font-weight: 600; }
+        
+        @media (max-width: 768px) {
+            .weather-grid { gap: 6px; }
+            .weather-card { min-width: 100px; padding: 10px; }
+            .weather-card-icon { font-size: 1.4rem; }
+            .weather-card-temp { font-size: 0.85rem; }
+            .weather-card-detail { font-size: 0.65rem; }
+            .modal-weather-bar { padding: 10px 14px; gap: 10px; }
+            .modal-weather-item { font-size: 0.78rem; }
+        }
+        @media (max-width: 480px) {
+            .weather-card { min-width: 85px; padding: 8px; }
+            .weather-card-date { font-size: 0.7rem; }
+            .weather-card-icon { font-size: 1.2rem; }
+            .weather-card-temp { font-size: 0.78rem; }
+        }
+        
+        /* ===== BRIEFING METEOROLÓGICO DO DIA ===== */
+        .briefing-section {
+            background: #1e293b; border-radius: 16px; padding: 20px;
+            margin-bottom: 20px; border: 1px solid #334155;
+        }
+        .briefing-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 16px; flex-wrap: wrap; gap: 10px;
+        }
+        .briefing-title {
+            font-size: 1.05rem; font-weight: 700; color: #94a3b8;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .briefing-status {
+            font-size: 0.85rem; font-weight: 700; padding: 6px 16px;
+            border-radius: 20px; display: flex; align-items: center; gap: 6px;
+        }
+        .briefing-alert-banner {
+            background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.3);
+            border-radius: 10px; padding: 12px 16px; margin-bottom: 14px;
+        }
+        .briefing-alert-item {
+            display: flex; align-items: center; gap: 8px; padding: 4px 0;
+            font-size: 0.85rem;
+        }
+        .briefing-alert-severity { font-weight: 700; min-width: 20px; text-align: center; }
+        .briefing-grid {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+        }
+        .briefing-metar-card {
+            background: #0f172a; border-radius: 10px; padding: 14px;
+            border-left: 3px solid #334155;
+        }
+        .briefing-metar-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 8px;
+        }
+        .briefing-metar-icao {
+            font-weight: 700; font-size: 0.95rem;
+        }
+        .briefing-metar-fltcat {
+            font-size: 0.72rem; font-weight: 700; padding: 2px 10px;
+            border-radius: 10px; text-transform: uppercase;
+        }
+        .briefing-metar-raw {
+            font-family: 'Courier New', monospace; font-size: 0.72rem;
+            color: #94a3b8; background: rgba(0,0,0,0.3); padding: 6px 10px;
+            border-radius: 6px; margin-bottom: 8px; word-break: break-all;
+            line-height: 1.5;
+        }
+        .briefing-metar-details {
+            display: flex; flex-wrap: wrap; gap: 10px; font-size: 0.8rem;
+            margin-bottom: 8px;
+        }
+        .briefing-metar-detail {
+            display: flex; align-items: center; gap: 4px; color: #e2e8f0;
+        }
+        .briefing-metar-detail-label { color: #64748b; }
+        .briefing-metar-alerts {
+            display: flex; flex-direction: column; gap: 3px; margin-top: 6px;
+        }
+        .briefing-metar-alert {
+            font-size: 0.75rem; padding: 3px 8px; border-radius: 4px;
+            display: flex; align-items: center; gap: 5px;
+        }
+        .briefing-taf-section {
+            margin-top: 14px; grid-column: 1 / -1;
+        }
+        .briefing-taf-card {
+            background: #0f172a; border-radius: 10px; padding: 14px;
+            margin-bottom: 10px;
+        }
+        .briefing-taf-raw {
+            font-family: 'Courier New', monospace; font-size: 0.72rem;
+            color: #94a3b8; line-height: 1.6; word-break: break-all;
+        }
+        .briefing-links {
+            display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px;
+            grid-column: 1 / -1;
+        }
+        .briefing-link {
+            background: #334155; color: #e2e8f0; padding: 8px 16px;
+            border-radius: 8px; text-decoration: none; font-size: 0.82rem;
+            font-weight: 600; display: flex; align-items: center; gap: 6px;
+            transition: all 0.2s; border: 1px solid #475569;
+        }
+        .briefing-link:hover { background: #475569; transform: translateY(-1px); }
+        .briefing-loading { text-align: center; color: #475569; font-size: 0.85rem; padding: 30px; }
+        .briefing-toggle {
+            background: #334155; border: 1px solid #475569; color: #94a3b8;
+            padding: 5px 14px; border-radius: 6px; cursor: pointer;
+            font-size: 0.8rem; font-weight: 500;
+        }
+        .briefing-toggle:hover { background: #475569; color: #e2e8f0; }
+        
+        @media (max-width: 768px) {
+            .briefing-grid { grid-template-columns: 1fr; }
+            .briefing-metar-details { gap: 6px; font-size: 0.75rem; }
+            .briefing-links { gap: 6px; }
+            .briefing-link { padding: 6px 12px; font-size: 0.75rem; }
+        }
     </style>
 </head>
 <body>
@@ -1040,6 +1246,31 @@ HTML_TEMPLATE = '''
             <div class="stat-card">
                 <div class="stat-number" style="color: #a78bfa;">{{ stats.total_shuttle }}<span style="color:#64748b;font-size:1.2rem;"> / </span><span style="color:#60a5fa;">{{ stats.total_charter }}</span></div>
                 <div class="stat-label">Shuttle / Charter</div>
+            </div>
+        </div>
+        
+        <!-- Previsão do Tempo -->
+        <div class="weather-section" id="weather-section">
+            <div class="weather-title">🌤️ Previsão do Tempo — Próximos 7 Dias</div>
+            <div class="weather-grid" id="weather-grid">
+                <div class="weather-loading">Carregando previsão do tempo...</div>
+            </div>
+        </div>
+        
+        <!-- Briefing Meteorológico do Dia -->
+        <div class="briefing-section" id="briefing-section">
+            <div class="briefing-header">
+                <div class="briefing-title">🛩️ Briefing Meteorológico — Hoje</div>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <div class="briefing-status" id="briefing-status" style="background:rgba(100,116,139,0.2);color:#94a3b8;">Carregando...</div>
+                    <button class="briefing-toggle" id="briefing-toggle" onclick="toggleBriefing()">Expandir</button>
+                </div>
+            </div>
+            <div id="briefing-alerts-banner"></div>
+            <div id="briefing-content" style="display:none;">
+                <div class="briefing-grid" id="briefing-grid">
+                    <div class="briefing-loading">Carregando dados meteorológicos...</div>
+                </div>
             </div>
         </div>
         
@@ -1143,6 +1374,8 @@ HTML_TEMPLATE = '''
                 </div>
             </div>
             
+            <div class="modal-weather-bar" id="modal-weather-bar" style="display:none;"></div>
+            
             <div class="modal-body" id="modal-body"></div>
         </div>
     </div>
@@ -1174,6 +1407,217 @@ HTML_TEMPLATE = '''
         const hoje = new Date();
         let activeFilter = 'all';
         let currentModalDate = null;
+        let weatherData = { base: {}, locations: {} };
+        
+        const SEVERITY_COLORS = ['#22c55e', '#38bdf8', '#f59e0b', '#ef4444'];
+        const SEVERITY_LABELS = ['Ideal p/ voo', 'Boas condições', 'Atenção', 'Desfavorável'];
+        
+        function getWeatherForLocation(icao, dateStr) {
+            return weatherData.locations[icao + '_' + dateStr] || null;
+        }
+        
+        function getWeatherForDate(dateStr) {
+            return weatherData.base[dateStr] || null;
+        }
+        
+        async function fetchWeather() {
+            try {
+                const resp = await fetch('/api/weather');
+                if (resp.ok) {
+                    weatherData = await resp.json();
+                    renderWeatherPanel();
+                    renderCalendario();
+                    renderProximosVoos();
+                    if (currentModalDate) abrirModal(currentModalDate);
+                }
+            } catch(e) {
+                console.warn('Weather fetch error:', e);
+            }
+        }
+        
+        function renderWeatherPanel() {
+            const grid = document.getElementById('weather-grid');
+            if (!grid) return;
+            
+            const now = new Date();
+            const days = [];
+            for (let i = 0; i < 7; i++) {
+                const d = new Date(now);
+                d.setDate(d.getDate() + i);
+                days.push(d.toISOString().slice(0, 10));
+            }
+            
+            const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+            
+            if (!weatherData.base || Object.keys(weatherData.base).length === 0) {
+                grid.innerHTML = '<div class="weather-loading">Previsão do tempo indisponível</div>';
+                return;
+            }
+            
+            grid.innerHTML = days.map((dateStr, idx) => {
+                const w = weatherData.base[dateStr];
+                if (!w) return '';
+                
+                const d = new Date(dateStr + 'T12:00:00');
+                const dayLabel = idx === 0 ? 'Hoje' : idx === 1 ? 'Amanhã' : dayNames[d.getDay()];
+                const dateLabel = String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0');
+                
+                const voosDia = (voosPorDia[dateStr] || []).filter(v => !v.is_retorno);
+                const numVoos = voosDia.length;
+                const hasFlights = numVoos > 0;
+                
+                const destWeathers = [];
+                const baseIcao = w.icao;
+                if (hasFlights) {
+                    const destIcaos = new Set();
+                    voosDia.forEach(v => { if (v.destino) destIcaos.add(v.destino); });
+                    destIcaos.forEach(icao => {
+                        const dw = getWeatherForLocation(icao, dateStr);
+                        if (dw && dw.icao !== baseIcao) destWeathers.push(dw);
+                    });
+                }
+                
+                let destHtml = '';
+                if (destWeathers.length > 0) {
+                    const worst = destWeathers.reduce((a, b) => a.severity > b.severity ? a : b);
+                    if (worst.severity > w.severity) {
+                        destHtml = '<div style="font-size:0.65rem;color:' + SEVERITY_COLORS[worst.severity] + ';margin-top:3px;">⚠ ' + worst.nome + ': ' + worst.desc + '</div>';
+                    }
+                }
+                
+                return '<div class="weather-card sev-' + w.severity + (hasFlights ? ' clickable' : '') + '"' +
+                    (hasFlights ? ' onclick="abrirModal(\'' + dateStr + '\')"' : '') + '>' +
+                    '<div class="weather-card-date">' + dayLabel + ' ' + dateLabel + '</div>' +
+                    '<div class="weather-card-icon">' + w.icon + '</div>' +
+                    '<div class="weather-card-temp">' + Math.round(w.temp_max) + '° / ' + Math.round(w.temp_min) + '°</div>' +
+                    '<div class="weather-card-detail">💧 ' + (w.precip_prob || 0) + '% &nbsp; 💨 ' + Math.round(w.wind_max || 0) + ' km/h</div>' +
+                    '<div class="weather-card-desc" style="color:' + SEVERITY_COLORS[w.severity] + ';">' + w.desc + '</div>' +
+                    destHtml +
+                    (hasFlights ? '<div class="weather-card-flights">✈ ' + numVoos + ' voo' + (numVoos > 1 ? 's' : '') + ' agendado' + (numVoos > 1 ? 's' : '') + '</div>' : '') +
+                    '</div>';
+            }).join('');
+        }
+        
+        // ===== BRIEFING METEOROLÓGICO DO DIA =====
+        let avWeatherData = null;
+        let briefingExpanded = false;
+        
+        function toggleBriefing() {
+            briefingExpanded = !briefingExpanded;
+            const content = document.getElementById('briefing-content');
+            const btn = document.getElementById('briefing-toggle');
+            content.style.display = briefingExpanded ? 'block' : 'none';
+            btn.textContent = briefingExpanded ? 'Recolher' : 'Expandir';
+        }
+        
+        async function fetchAviationWeather() {
+            try {
+                const resp = await fetch('/api/aviation-weather');
+                if (resp.ok) {
+                    avWeatherData = await resp.json();
+                    renderBriefing();
+                }
+            } catch(e) {
+                console.warn('Aviation weather fetch error:', e);
+            }
+        }
+        
+        function renderBriefing() {
+            if (!avWeatherData) return;
+            const aw = avWeatherData;
+            const sevColors = ['#22c55e', '#38bdf8', '#f59e0b', '#ef4444'];
+            const sevLabels = ['✅ Condições Ideais', '🔵 Atenção Leve', '⚠️ Atenção', '🔴 Desfavorável'];
+            const sevBgs = ['rgba(34,197,94,0.15)', 'rgba(59,130,246,0.15)', 'rgba(245,158,11,0.15)', 'rgba(239,68,68,0.15)'];
+            
+            const statusEl = document.getElementById('briefing-status');
+            const sev = Math.min(aw.overall_severity || 0, 3);
+            statusEl.style.background = sevBgs[sev];
+            statusEl.style.color = sevColors[sev];
+            statusEl.innerHTML = sevLabels[sev] + (aw.num_flights_today > 0 ? ' · ' + aw.num_flights_today + ' voo(s) hoje' : '');
+            
+            const bannerEl = document.getElementById('briefing-alerts-banner');
+            if (aw.global_alerts && aw.global_alerts.length > 0) {
+                let bHtml = '<div class="briefing-alert-banner">';
+                bHtml += '<div style="font-weight:700;font-size:0.85rem;color:#ef4444;margin-bottom:6px;">⚠ ALERTAS ATIVOS</div>';
+                aw.global_alerts.forEach(a => {
+                    const ac = sevColors[Math.min(a.severity, 3)];
+                    bHtml += '<div class="briefing-alert-item"><span class="briefing-alert-severity" style="color:' + ac + ';">●</span><span style="color:#e2e8f0;"><strong>' + a.icao + '</strong> (' + a.nome + '): ' + a.msg + '</span></div>';
+                });
+                bHtml += '</div>';
+                bannerEl.innerHTML = bHtml;
+                briefingExpanded = true;
+                document.getElementById('briefing-content').style.display = 'block';
+                document.getElementById('briefing-toggle').textContent = 'Recolher';
+            } else {
+                bannerEl.innerHTML = '';
+            }
+            
+            const grid = document.getElementById('briefing-grid');
+            let html = '';
+            
+            if (aw.metars && aw.metars.length > 0) {
+                aw.metars.forEach(m => {
+                    const sc = sevColors[Math.min(m.severity, 3)];
+                    const hasFlight = m.has_flights_today;
+                    const flightBadge = hasFlight ? '<span style="font-size:0.65rem;background:#1e40af;color:#fff;padding:2px 8px;border-radius:10px;margin-left:6px;">✈ Voo hoje</span>' : '';
+                    
+                    html += '<div class="briefing-metar-card" style="border-left-color:' + sc + ';">';
+                    html += '<div class="briefing-metar-header">';
+                    html += '<div><span class="briefing-metar-icao" style="color:' + sc + ';">' + m.icao + '</span><span style="color:#64748b;font-size:0.8rem;margin-left:6px;">' + m.nome + '</span>' + flightBadge + '</div>';
+                    if (m.fltcat) {
+                        html += '<span class="briefing-metar-fltcat" style="background:' + m.fltcat_color + ';color:#fff;">' + m.fltcat + '</span>';
+                    }
+                    html += '</div>';
+                    
+                    html += '<div class="briefing-metar-raw">' + m.raw + '</div>';
+                    
+                    html += '<div class="briefing-metar-details">';
+                    if (m.temp !== null) html += '<div class="briefing-metar-detail"><span class="briefing-metar-detail-label">🌡</span>' + m.temp + '°/' + m.dewp + '°C</div>';
+                    if (m.wdir !== null) html += '<div class="briefing-metar-detail"><span class="briefing-metar-detail-label">💨</span>' + m.wdir + '° ' + m.wspd + 'kt' + (m.wgst ? ' G' + m.wgst + 'kt' : '') + '</div>';
+                    if (m.visib !== null) html += '<div class="briefing-metar-detail"><span class="briefing-metar-detail-label">👁</span>' + m.visib + 'SM</div>';
+                    if (m.altim !== null) html += '<div class="briefing-metar-detail"><span class="briefing-metar-detail-label">📊</span>Q' + m.altim + '</div>';
+                    if (m.clouds && m.clouds.length > 0) {
+                        const clStr = m.clouds.map(c => c.cover + (c.base ? String(c.base).padStart(3,'0') : '')).join(' ');
+                        html += '<div class="briefing-metar-detail"><span class="briefing-metar-detail-label">☁</span>' + clStr + '</div>';
+                    }
+                    if (m.wxString) html += '<div class="briefing-metar-detail"><span class="briefing-metar-detail-label">🌧</span>' + m.wxString + '</div>';
+                    html += '</div>';
+                    
+                    if (m.alerts && m.alerts.length > 0) {
+                        html += '<div class="briefing-metar-alerts">';
+                        m.alerts.forEach(a => {
+                            const ac = sevColors[Math.min(a.severity, 3)];
+                            const bg = sevBgs[Math.min(a.severity, 3)];
+                            html += '<div class="briefing-metar-alert" style="background:' + bg + ';color:' + ac + ';">● ' + a.msg + '</div>';
+                        });
+                        html += '</div>';
+                    }
+                    html += '</div>';
+                });
+            }
+            
+            if (aw.tafs && aw.tafs.length > 0) {
+                html += '<div class="briefing-taf-section">';
+                html += '<div style="font-weight:600;font-size:0.85rem;color:#94a3b8;margin-bottom:8px;">📋 Previsão Terminal (TAF)</div>';
+                aw.tafs.forEach(t => {
+                    html += '<div class="briefing-taf-card">';
+                    html += '<div style="font-weight:700;color:#e2e8f0;margin-bottom:6px;">' + t.icao + '</div>';
+                    html += '<div class="briefing-taf-raw">' + t.raw + '</div>';
+                    html += '</div>';
+                });
+                html += '</div>';
+            }
+            
+            html += '<div class="briefing-links">';
+            html += '<a class="briefing-link" href="' + (aw.satellite_urls?.goes_realcada || '#') + '" target="_blank" rel="noopener">🛰️ Satélite REDEMET</a>';
+            html += '<a class="briefing-link" href="' + (aw.satellite_urls?.sigwx || '#') + '" target="_blank" rel="noopener">📊 Carta SIGWX</a>';
+            html += '<a class="briefing-link" href="' + (aw.satellite_urls?.radar || '#') + '" target="_blank" rel="noopener">📡 Radar Meteorológico</a>';
+            html += '<a class="briefing-link" href="' + (aw.satellite_urls?.cptec_satelite || '#') + '" target="_blank" rel="noopener">🌍 CPTEC/INPE Satélite</a>';
+            html += '<a class="briefing-link" href="https://redemet.decea.mil.br/?i=produtos&p=consulta-de-mensagens-opmet" target="_blank" rel="noopener">📝 METAR/TAF REDEMET</a>';
+            html += '</div>';
+            
+            grid.innerHTML = html;
+        }
         
         const mesesNome = ['Janeiro', 'Fevereiro', 'Marco', 'Abril', 'Maio', 'Junho',
                           'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
@@ -1243,6 +1687,20 @@ HTML_TEMPLATE = '''
                 const tiNf = tipoInfo(voo.tipo);
                 const badge = `<span class="nf-badge" style="background:${tiNf.cor};color:#fff;">${tiNf.badge}</span>`;
                 
+                const origW = getWeatherForLocation(voo.origem, voo._date);
+                const destW = getWeatherForLocation(voo.destino, voo._date);
+                let weatherLine = '';
+                if (origW) {
+                    const oc = SEVERITY_COLORS[origW.severity];
+                    weatherLine += `<div style="font-size:0.73rem;margin-top:4px;display:flex;gap:8px;align-items:center;">`;
+                    weatherLine += `<span class="weather-badge-inline sev-${origW.severity}" title="${origW.nome}: ${origW.desc}">${origW.icon} ${Math.round(origW.temp_max)}° 💧${origW.precip_prob}%</span>`;
+                    if (destW && destW.icao !== origW.icao) {
+                        weatherLine += `<span style="color:#475569;">→</span>`;
+                        weatherLine += `<span class="weather-badge-inline sev-${destW.severity}" title="${destW.nome}: ${destW.desc}">${destW.icon} ${Math.round(destW.temp_max)}° 💧${destW.precip_prob}%</span>`;
+                    }
+                    weatherLine += '</div>';
+                }
+                
                 return `
                 <div class="nf-card" style="border-left-color:${cor};" onclick="abrirModal('${voo._date}')">
                     <div class="nf-header">
@@ -1251,6 +1709,7 @@ HTML_TEMPLATE = '''
                     </div>
                     <div class="nf-route">${voo.origem_nome} → ${voo.destino_nome}</div>
                     <div class="nf-time">${hora} · ${voo.duracao_min}min · ${voo.passageiros} pax ${badge}</div>
+                    ${weatherLine}
                 </div>`;
             }).join('');
         }
@@ -1284,7 +1743,9 @@ HTML_TEMPLATE = '''
                 const classePast = isPast ? ' past' : '';
                 
                 html += `<div class="day-cell${classeHoje}${classePast}" onclick="abrirModal('${dataStr}')" style="position:relative;">`;
-                html += `<div class="day-number">${dia}</div>`;
+                const wDay = getWeatherForDate(dataStr);
+                const wBadge = wDay ? `<span style="float:right;font-size:0.75rem;" title="${wDay.desc}: ${Math.round(wDay.temp_max)}°/${Math.round(wDay.temp_min)}°, 💧${wDay.precip_prob}%">${wDay.icon} <span style="font-size:0.68rem;color:${SEVERITY_COLORS[wDay.severity]};">${Math.round(wDay.temp_max)}°</span></span>` : '';
+                html += `<div class="day-number">${dia}${wBadge}</div>`;
                 html += '<div class="flights-list">';
                 
                 const mergedDia = agruparPorMissao(voosDia);
@@ -1427,6 +1888,55 @@ HTML_TEMPLATE = '''
             const voosReais = mergedVoos.filter(v => !v.is_retorno);
             titulo.textContent = `${diaSemana}, ${diaNum} de ${mesNome} de ${ano}`;
             subtitulo.textContent = `${voosReais.length} missao(oes) · 3 aeronaves`;
+            
+            // Weather bar no modal
+            const modalWeatherBar = document.getElementById('modal-weather-bar');
+            if (modalWeatherBar) {
+                const mw = getWeatherForDate(dataStr);
+                if (mw) {
+                    const sc = SEVERITY_COLORS[mw.severity];
+                    const sl = SEVERITY_LABELS[mw.severity];
+                    let mwHtml = '<span class="modal-weather-label">TEMPO BASE:</span>';
+                    mwHtml += `<span class="modal-weather-item" style="color:${sc};">${mw.icon} ${mw.desc}</span>`;
+                    mwHtml += `<span class="modal-weather-item">🌡 ${Math.round(mw.temp_max)}° / ${Math.round(mw.temp_min)}°</span>`;
+                    mwHtml += `<span class="modal-weather-item">💧 ${mw.precip_prob || 0}%</span>`;
+                    mwHtml += `<span class="modal-weather-item">💨 ${Math.round(mw.wind_max || 0)} km/h</span>`;
+                    if (mw.wind_gusts) mwHtml += `<span class="modal-weather-item">Rajadas: ${Math.round(mw.wind_gusts)} km/h</span>`;
+                    mwHtml += `<span class="modal-weather-item" style="color:${sc};font-weight:600;margin-left:auto;">● ${sl}</span>`;
+                    
+                    // Destinos com condições adversas
+                    const destIcaos = new Set();
+                    voosReais.forEach(v => { if (v.destino) destIcaos.add(v.destino); });
+                    destIcaos.forEach(icao => {
+                        const dw = getWeatherForLocation(icao, dataStr);
+                        if (dw && dw.severity >= 2 && dw.icao !== mw.icao) {
+                            mwHtml += `<div style="width:100%;margin-top:4px;"><span class="modal-weather-label">⚠ ${dw.nome}:</span> <span style="color:${SEVERITY_COLORS[dw.severity]};">${dw.icon} ${dw.desc} · ${Math.round(dw.temp_max)}° · 💧${dw.precip_prob}% · 💨${Math.round(dw.wind_max)} km/h</span></div>`;
+                        }
+                    });
+                    
+                    // METAR data for today
+                    const todayStr = new Date().toISOString().slice(0, 10);
+                    if (dataStr === todayStr && avWeatherData && avWeatherData.metars) {
+                        const relevantMetars = avWeatherData.metars.filter(m => m.has_flights_today);
+                        if (relevantMetars.length > 0) {
+                            mwHtml += '<div style="width:100%;margin-top:8px;padding-top:8px;border-top:1px solid #334155;">';
+                            mwHtml += '<span class="modal-weather-label">METAR AO VIVO:</span>';
+                            relevantMetars.forEach(m => {
+                                const mc = ['#22c55e','#38bdf8','#f59e0b','#ef4444'][Math.min(m.severity,3)];
+                                mwHtml += `<div style="width:100%;margin-top:4px;"><span style="color:${mc};font-weight:700;">${m.icao}</span> <span style="font-size:0.8rem;color:#94a3b8;">${m.nome}</span>`;
+                                if (m.fltcat) mwHtml += ` <span style="font-size:0.65rem;background:${m.fltcat_color};color:#fff;padding:1px 6px;border-radius:8px;">${m.fltcat}</span>`;
+                                mwHtml += `<div style="font-family:monospace;font-size:0.7rem;color:#64748b;margin-top:2px;">${m.raw}</div></div>`;
+                            });
+                            mwHtml += '</div>';
+                        }
+                    }
+                    
+                    modalWeatherBar.innerHTML = mwHtml;
+                    modalWeatherBar.style.display = 'flex';
+                } else {
+                    modalWeatherBar.style.display = 'none';
+                }
+            }
             
             {
                 const AERONAVES = ['PR-OMB', 'PR-OMH', 'PR-OOE'];
@@ -1646,6 +2156,8 @@ HTML_TEMPLATE = '''
                     text.textContent = `Atualizado em ${data.atualizado_em}`;
                 }
                 spinner.classList.remove('active');
+                fetchWeather();
+                fetchAviationWeather();
             } catch(e) {
                 document.getElementById('refresh-spinner').classList.remove('active');
             }
@@ -1847,6 +2359,8 @@ HTML_TEMPLATE = '''
             renderCalendario();
             renderProximosVoos();
             setTimeout(initMap, 100);
+            fetchWeather();
+            fetchAviationWeather();
         });
     </script>
 </body>
@@ -1940,6 +2454,330 @@ def _get_cached_data():
     return voos_por_dia, stats, voos_json
 
 
+# ===== AVIATION WEATHER (METAR / TAF / Alertas / Satélite / SIGWX) =====
+_avwx_cache = {'data': None, 'timestamp': 0}
+_avwx_cache_lock = threading.Lock()
+AVWX_CACHE_TTL = 300  # 5 min
+
+METAR_AIRPORTS = {'SBGR', 'SBSP', 'SBMT', 'SBJH', 'SBJD', 'SBSJ', 'SBRJ', 'SBKP', 'SBOP'}
+
+SATELLITE_URLS = {
+    'goes_realcada': 'https://redemet.decea.mil.br/old/?i=produtos&p=imagens-de-satelite',
+    'sigwx': 'https://redemet.decea.mil.br/sigwx/',
+    'radar': 'https://redemet.decea.mil.br/old/?i=produtos&p=imagem-radar-702',
+    'cptec_satelite': 'https://satelite.cptec.inpe.br/home/',
+}
+
+FLIGHT_CAT_INFO = {
+    'VFR':  {'desc': 'Visual Flight Rules',  'color': '#22c55e', 'severity': 0},
+    'MVFR': {'desc': 'Marginal VFR',         'color': '#3b82f6', 'severity': 1},
+    'IFR':  {'desc': 'Instrument Flight Rules','color': '#ef4444', 'severity': 3},
+    'LIFR': {'desc': 'Low IFR',              'color': '#dc2626', 'severity': 3},
+}
+
+WX_PHENOMENA_ALERTS = {
+    'TS': {'desc': 'Trovoada', 'severity': 3},
+    'TSRA': {'desc': 'Trovoada com chuva', 'severity': 3},
+    'TSGR': {'desc': 'Trovoada com granizo', 'severity': 3},
+    'FG': {'desc': 'Nevoeiro', 'severity': 2},
+    'BR': {'desc': 'Névoa úmida', 'severity': 1},
+    'HZ': {'desc': 'Névoa seca', 'severity': 1},
+    'RA': {'desc': 'Chuva', 'severity': 1},
+    '+RA': {'desc': 'Chuva forte', 'severity': 2},
+    '-RA': {'desc': 'Chuva fraca', 'severity': 0},
+    'SH': {'desc': 'Pancadas', 'severity': 1},
+    'SHRA': {'desc': 'Pancadas de chuva', 'severity': 1},
+    '+SHRA': {'desc': 'Pancadas fortes', 'severity': 2},
+    'GR': {'desc': 'Granizo', 'severity': 3},
+    'SQ': {'desc': 'Rajada forte', 'severity': 3},
+    'FC': {'desc': 'Funil de nuvem', 'severity': 3},
+    'CB': {'desc': 'Cumulonimbus', 'severity': 2},
+    'TCU': {'desc': 'Cumulus congestus', 'severity': 1},
+    'FU': {'desc': 'Fumaça', 'severity': 1},
+    'VA': {'desc': 'Cinza vulcânica', 'severity': 3},
+}
+
+SEVERITY_LABELS_AV = ['Ideal', 'Atenção Leve', 'Atenção', 'Desfavorável']
+SEVERITY_COLORS_AV = ['#22c55e', '#38bdf8', '#f59e0b', '#ef4444']
+
+
+def _parse_metar_alerts(metar_obj):
+    """Analisa METAR e gera alertas para operações de helicóptero."""
+    alerts = []
+    severity = 0
+
+    wspd = metar_obj.get('wspd') or 0
+    wgst = metar_obj.get('wgst') or 0
+    visib = metar_obj.get('visib')
+    wx = metar_obj.get('wxString') or ''
+    clouds = metar_obj.get('clouds') or []
+    fltcat = metar_obj.get('fltcat') or ''
+
+    if wgst >= 35:
+        alerts.append({'msg': f'Rajadas {wgst}kt — limite operacional', 'severity': 3})
+        severity = max(severity, 3)
+    elif wgst >= 25:
+        alerts.append({'msg': f'Rajadas {wgst}kt — atenção em helipontos elevados', 'severity': 2})
+        severity = max(severity, 2)
+    elif wspd >= 25:
+        alerts.append({'msg': f'Vento {wspd}kt — atenção', 'severity': 2})
+        severity = max(severity, 2)
+    elif wspd >= 15:
+        alerts.append({'msg': f'Vento {wspd}kt', 'severity': 1})
+        severity = max(severity, 1)
+
+    if visib is not None:
+        vis_m = visib * 1609.34  # SM to meters
+        if vis_m < 1500:
+            alerts.append({'msg': f'Visibilidade muito baixa ({visib}SM / {vis_m:.0f}m) — abaixo mínimo VFR', 'severity': 3})
+            severity = max(severity, 3)
+        elif vis_m < 3000:
+            alerts.append({'msg': f'Visibilidade reduzida ({visib}SM / {vis_m:.0f}m)', 'severity': 2})
+            severity = max(severity, 2)
+        elif vis_m < 5000:
+            alerts.append({'msg': f'Visibilidade moderada ({visib}SM / {vis_m:.0f}m)', 'severity': 1})
+            severity = max(severity, 1)
+
+    lowest_ceiling = None
+    for c in clouds:
+        cover = c.get('cover', '')
+        base = c.get('base')
+        if cover in ('BKN', 'OVC') and base is not None:
+            if lowest_ceiling is None or base < lowest_ceiling:
+                lowest_ceiling = base
+    if lowest_ceiling is not None:
+        if lowest_ceiling < 500:
+            alerts.append({'msg': f'Teto muito baixo {lowest_ceiling}ft — abaixo mínimo VFR', 'severity': 3})
+            severity = max(severity, 3)
+        elif lowest_ceiling < 1000:
+            alerts.append({'msg': f'Teto baixo {lowest_ceiling}ft — atenção para aproximações', 'severity': 2})
+            severity = max(severity, 2)
+        elif lowest_ceiling < 1500:
+            alerts.append({'msg': f'Teto {lowest_ceiling}ft — VFR marginal', 'severity': 1})
+            severity = max(severity, 1)
+
+    has_cb = any('CB' in str(c.get('cover', '')) or 'CB' in str(c) for c in clouds)
+    has_tcu = any('TCU' in str(c.get('cover', '')) or 'TCU' in str(c) for c in clouds)
+    if has_cb:
+        alerts.append({'msg': 'Cumulonimbus (CB) reportado — risco de trovoada', 'severity': 3})
+        severity = max(severity, 3)
+    elif has_tcu:
+        alerts.append({'msg': 'Cumulus congestus (TCU) — possível desenvolvimento CB', 'severity': 2})
+        severity = max(severity, 2)
+
+    for phenom, info in WX_PHENOMENA_ALERTS.items():
+        if phenom in wx.upper():
+            alerts.append({'msg': f'{info["desc"]} ({phenom})', 'severity': info['severity']})
+            severity = max(severity, info['severity'])
+            break
+
+    if fltcat in FLIGHT_CAT_INFO:
+        fc = FLIGHT_CAT_INFO[fltcat]
+        severity = max(severity, fc['severity'])
+
+    return {'alerts': alerts, 'severity': severity}
+
+
+def _fetch_metars_aviationweather(icaos):
+    """Busca METARs via aviationweather.gov API."""
+    if not icaos:
+        return []
+    ids = ','.join(icaos)
+    url = f'https://aviationweather.gov/api/data/metar?ids={ids}&format=json&hours=2'
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'REVO-FlightScheduler/1.0'})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode())
+    except Exception as e:
+        logging.warning(f'METAR fetch error: {e}')
+        return []
+
+
+def _fetch_tafs_aviationweather(icaos):
+    """Busca TAFs via aviationweather.gov API."""
+    if not icaos:
+        return []
+    ids = ','.join(icaos)
+    url = f'https://aviationweather.gov/api/data/taf?ids={ids}&format=json'
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'REVO-FlightScheduler/1.0'})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode())
+    except Exception as e:
+        logging.warning(f'TAF fetch error: {e}')
+        return []
+
+
+def _get_aviation_weather():
+    """Briefing meteorológico completo do dia: METAR, TAF, alertas, satélite, SIGWX."""
+    now = time.time()
+    with _avwx_cache_lock:
+        if _avwx_cache['data'] and (now - _avwx_cache['timestamp']) < AVWX_CACHE_TTL:
+            return _avwx_cache['data']
+
+    hoje_str = datetime.now().strftime('%Y-%m-%d')
+    icaos_voo = set()
+    with _cache_lock:
+        voos_por_dia = _cache.get('data') or {}
+    for voo in (voos_por_dia.get(hoje_str) or []):
+        if not voo.get('is_retorno', False):
+            orig = voo.get('origem', '')
+            dest = voo.get('destino', '')
+            if orig:
+                icaos_voo.add(orig)
+            if dest:
+                icaos_voo.add(dest)
+
+    icaos_metar = (icaos_voo & METAR_AIRPORTS) | {'SBGR', 'SBSP', 'SBMT'}
+    icaos_taf = {'SBGR', 'SBSP'}
+
+    raw_metars = _fetch_metars_aviationweather(icaos_metar)
+    raw_tafs = _fetch_tafs_aviationweather(icaos_taf)
+
+    seen = set()
+    metars = []
+    for m in raw_metars:
+        icao = m.get('icaoId', '')
+        if icao in seen:
+            continue
+        seen.add(icao)
+        parsed = _parse_metar_alerts(m)
+        fltcat = m.get('fltcat') or ''
+        fc_info = FLIGHT_CAT_INFO.get(fltcat, {'desc': 'N/A', 'color': '#94a3b8', 'severity': 0})
+        hp = HELIPONTOS.get(icao, {})
+        metars.append({
+            'icao': icao,
+            'nome': hp.get('nome', icao),
+            'raw': m.get('rawOb', ''),
+            'temp': m.get('temp'),
+            'dewp': m.get('dewp'),
+            'wdir': m.get('wdir'),
+            'wspd': m.get('wspd'),
+            'wgst': m.get('wgst'),
+            'visib': m.get('visib'),
+            'clouds': m.get('clouds', []),
+            'wxString': m.get('wxString', ''),
+            'altim': m.get('altim'),
+            'fltcat': fltcat,
+            'fltcat_desc': fc_info['desc'],
+            'fltcat_color': fc_info['color'],
+            'alerts': parsed['alerts'],
+            'severity': parsed['severity'],
+            'has_flights_today': icao in icaos_voo,
+        })
+
+    tafs = []
+    for t in raw_tafs:
+        tafs.append({
+            'icao': t.get('icaoId', ''),
+            'raw': t.get('rawTAF', ''),
+        })
+
+    overall_severity = max((m['severity'] for m in metars), default=0)
+    global_alerts = []
+    for m in metars:
+        for a in m['alerts']:
+            if a['severity'] >= 2:
+                global_alerts.append({
+                    'icao': m['icao'],
+                    'nome': m['nome'],
+                    'msg': a['msg'],
+                    'severity': a['severity'],
+                })
+
+    result = {
+        'date': hoje_str,
+        'metars': metars,
+        'tafs': tafs,
+        'overall_severity': overall_severity,
+        'overall_label': SEVERITY_LABELS_AV[min(overall_severity, 3)],
+        'overall_color': SEVERITY_COLORS_AV[min(overall_severity, 3)],
+        'global_alerts': global_alerts,
+        'satellite_urls': SATELLITE_URLS,
+        'num_flights_today': len([v for v in (voos_por_dia.get(hoje_str) or []) if not v.get('is_retorno')]),
+        'icaos_with_flights': list(icaos_voo),
+    }
+
+    with _avwx_cache_lock:
+        _avwx_cache['data'] = result
+        _avwx_cache['timestamp'] = time.time()
+
+    return result
+
+
+def _get_weather_data():
+    """Busca previsão do tempo (7 dias) via Open-Meteo para locais com voos agendados."""
+    now = time.time()
+    with _weather_cache_lock:
+        if _weather_cache['data'] and (now - _weather_cache['timestamp']) < WEATHER_CACHE_TTL:
+            return _weather_cache['data']
+
+    icaos = {HANGAR_BASE}
+    with _cache_lock:
+        voos_por_dia = _cache.get('data') or {}
+
+    hoje = datetime.now()
+    for i in range(7):
+        data_str = (hoje + timedelta(days=i)).strftime('%Y-%m-%d')
+        for voo in (voos_por_dia.get(data_str) or []):
+            if not voo.get('is_retorno', False):
+                orig = voo.get('origem', '')
+                dest = voo.get('destino', '')
+                if orig and orig in HELIPONTOS:
+                    icaos.add(orig)
+                if dest and dest in HELIPONTOS:
+                    icaos.add(dest)
+
+    weather_result = {'base': {}, 'locations': {}}
+
+    for icao in icaos:
+        hp = HELIPONTOS.get(icao)
+        if not hp:
+            continue
+        try:
+            url = (
+                f"https://api.open-meteo.com/v1/forecast?"
+                f"latitude={hp['lat']}&longitude={hp['lon']}"
+                f"&daily=weather_code,temperature_2m_max,temperature_2m_min,"
+                f"precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max"
+                f"&timezone=America/Sao_Paulo&forecast_days=7"
+            )
+            req = urllib.request.Request(url, headers={'User-Agent': 'REVO-FlightScheduler/1.0'})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+
+            daily = data.get('daily', {})
+            times = daily.get('time', [])
+            for idx, date_str in enumerate(times):
+                wmo = daily.get('weather_code', [None])[idx]
+                info = WMO_CODES.get(wmo, _WMO_DEFAULT)
+                entry = {
+                    'icao': icao,
+                    'nome': hp['nome'],
+                    'date': date_str,
+                    'weather_code': wmo,
+                    'desc': info['desc'],
+                    'icon': info['icon'],
+                    'severity': info['severity'],
+                    'temp_max': daily.get('temperature_2m_max', [None])[idx],
+                    'temp_min': daily.get('temperature_2m_min', [None])[idx],
+                    'precip_prob': daily.get('precipitation_probability_max', [None])[idx],
+                    'wind_max': daily.get('wind_speed_10m_max', [None])[idx],
+                    'wind_gusts': daily.get('wind_gusts_10m_max', [None])[idx],
+                }
+                weather_result['locations'][f"{icao}_{date_str}"] = entry
+                if icao == HANGAR_BASE:
+                    weather_result['base'][date_str] = entry
+        except Exception as e:
+            logging.warning(f"Erro ao buscar tempo para {icao}: {e}")
+
+    with _weather_cache_lock:
+        _weather_cache['data'] = weather_result
+        _weather_cache['timestamp'] = time.time()
+
+    return weather_result
+
+
 @app.route('/')
 def index():
     voos_por_dia, stats, voos_json = _get_cached_data()
@@ -1982,6 +2820,28 @@ def api_voos():
         'stats': stats,
         'atualizado_em': datetime.now().strftime('%d/%m/%Y %H:%M')
     })
+
+
+@app.route('/api/weather')
+def api_weather():
+    """Previsão do tempo para locais com voos nos próximos 7 dias."""
+    try:
+        data = _get_weather_data()
+        return jsonify(data)
+    except Exception as e:
+        logging.error(f"Weather API error: {e}")
+        return jsonify({'base': {}, 'locations': {}})
+
+
+@app.route('/api/aviation-weather')
+def api_aviation_weather():
+    """Briefing meteorológico do dia: METAR, TAF, alertas, satélite, SIGWX."""
+    try:
+        data = _get_aviation_weather()
+        return jsonify(data)
+    except Exception as e:
+        logging.error(f"Aviation weather error: {e}")
+        return jsonify({'metars': [], 'tafs': [], 'overall_severity': 0, 'global_alerts': []})
 
 
 @app.route('/health')
