@@ -1249,31 +1249,6 @@ HTML_TEMPLATE = '''
             </div>
         </div>
         
-        <!-- Previsão do Tempo -->
-        <div class="weather-section" id="weather-section">
-            <div class="weather-title">🌤️ Previsão do Tempo — Próximos 7 Dias</div>
-            <div class="weather-grid" id="weather-grid">
-                <div class="weather-loading">Carregando previsão do tempo...</div>
-            </div>
-        </div>
-        
-        <!-- Briefing Meteorológico do Dia -->
-        <div class="briefing-section" id="briefing-section">
-            <div class="briefing-header">
-                <div class="briefing-title">🛩️ Briefing Meteorológico — Hoje</div>
-                <div style="display:flex;gap:8px;align-items:center;">
-                    <div class="briefing-status" id="briefing-status" style="background:rgba(100,116,139,0.2);color:#94a3b8;">Carregando...</div>
-                    <button class="briefing-toggle" id="briefing-toggle" onclick="toggleBriefing()">Expandir</button>
-                </div>
-            </div>
-            <div id="briefing-alerts-banner"></div>
-            <div id="briefing-content" style="display:none;">
-                <div class="briefing-grid" id="briefing-grid">
-                    <div class="briefing-loading">Carregando dados meteorológicos...</div>
-                </div>
-            </div>
-        </div>
-        
         <!-- Proximos Voos -->
         <div class="next-flights" id="next-flights-panel">
             <div class="next-flights-title"><span class="pulse"></span> Proximos Voos</div>
@@ -1425,9 +1400,6 @@ HTML_TEMPLATE = '''
                 const resp = await fetch('/api/weather');
                 if (resp.ok) {
                     weatherData = await resp.json();
-                    renderWeatherPanel();
-                    renderCalendario();
-                    renderProximosVoos();
                     if (currentModalDate) abrirModal(currentModalDate);
                 }
             } catch(e) {
@@ -1435,188 +1407,18 @@ HTML_TEMPLATE = '''
             }
         }
         
-        function renderWeatherPanel() {
-            const grid = document.getElementById('weather-grid');
-            if (!grid) return;
-            
-            const now = new Date();
-            const days = [];
-            for (let i = 0; i < 7; i++) {
-                const d = new Date(now);
-                d.setDate(d.getDate() + i);
-                days.push(d.toISOString().slice(0, 10));
-            }
-            
-            const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
-            
-            if (!weatherData.base || Object.keys(weatherData.base).length === 0) {
-                grid.innerHTML = '<div class="weather-loading">Previsão do tempo indisponível</div>';
-                return;
-            }
-            
-            grid.innerHTML = days.map((dateStr, idx) => {
-                const w = weatherData.base[dateStr];
-                if (!w) return '';
-                
-                const d = new Date(dateStr + 'T12:00:00');
-                const dayLabel = idx === 0 ? 'Hoje' : idx === 1 ? 'Amanhã' : dayNames[d.getDay()];
-                const dateLabel = String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0');
-                
-                const voosDia = (voosPorDia[dateStr] || []).filter(v => !v.is_retorno);
-                const numVoos = voosDia.length;
-                const hasFlights = numVoos > 0;
-                
-                const destWeathers = [];
-                const baseIcao = w.icao;
-                if (hasFlights) {
-                    const destIcaos = new Set();
-                    voosDia.forEach(v => { if (v.destino) destIcaos.add(v.destino); });
-                    destIcaos.forEach(icao => {
-                        const dw = getWeatherForLocation(icao, dateStr);
-                        if (dw && dw.icao !== baseIcao) destWeathers.push(dw);
-                    });
-                }
-                
-                let destHtml = '';
-                if (destWeathers.length > 0) {
-                    const worst = destWeathers.reduce((a, b) => a.severity > b.severity ? a : b);
-                    if (worst.severity > w.severity) {
-                        destHtml = '<div style="font-size:0.65rem;color:' + SEVERITY_COLORS[worst.severity] + ';margin-top:3px;">⚠ ' + worst.nome + ': ' + worst.desc + '</div>';
-                    }
-                }
-                
-                return '<div class="weather-card sev-' + w.severity + (hasFlights ? ' clickable' : '') + '"' +
-                    (hasFlights ? ' onclick="abrirModal(\'' + dateStr + '\')"' : '') + '>' +
-                    '<div class="weather-card-date">' + dayLabel + ' ' + dateLabel + '</div>' +
-                    '<div class="weather-card-icon">' + w.icon + '</div>' +
-                    '<div class="weather-card-temp">' + Math.round(w.temp_max) + '° / ' + Math.round(w.temp_min) + '°</div>' +
-                    '<div class="weather-card-detail">💧 ' + (w.precip_prob || 0) + '% &nbsp; 💨 ' + Math.round(w.wind_max || 0) + ' km/h</div>' +
-                    '<div class="weather-card-desc" style="color:' + SEVERITY_COLORS[w.severity] + ';">' + w.desc + '</div>' +
-                    destHtml +
-                    (hasFlights ? '<div class="weather-card-flights">✈ ' + numVoos + ' voo' + (numVoos > 1 ? 's' : '') + ' agendado' + (numVoos > 1 ? 's' : '') + '</div>' : '') +
-                    '</div>';
-            }).join('');
-        }
-        
-        // ===== BRIEFING METEOROLÓGICO DO DIA =====
         let avWeatherData = null;
-        let briefingExpanded = false;
-        
-        function toggleBriefing() {
-            briefingExpanded = !briefingExpanded;
-            const content = document.getElementById('briefing-content');
-            const btn = document.getElementById('briefing-toggle');
-            content.style.display = briefingExpanded ? 'block' : 'none';
-            btn.textContent = briefingExpanded ? 'Recolher' : 'Expandir';
-        }
         
         async function fetchAviationWeather() {
             try {
                 const resp = await fetch('/api/aviation-weather');
                 if (resp.ok) {
                     avWeatherData = await resp.json();
-                    renderBriefing();
+                    if (currentModalDate) abrirModal(currentModalDate);
                 }
             } catch(e) {
                 console.warn('Aviation weather fetch error:', e);
             }
-        }
-        
-        function renderBriefing() {
-            if (!avWeatherData) return;
-            const aw = avWeatherData;
-            const sevColors = ['#22c55e', '#38bdf8', '#f59e0b', '#ef4444'];
-            const sevLabels = ['✅ Condições Ideais', '🔵 Atenção Leve', '⚠️ Atenção', '🔴 Desfavorável'];
-            const sevBgs = ['rgba(34,197,94,0.15)', 'rgba(59,130,246,0.15)', 'rgba(245,158,11,0.15)', 'rgba(239,68,68,0.15)'];
-            
-            const statusEl = document.getElementById('briefing-status');
-            const sev = Math.min(aw.overall_severity || 0, 3);
-            statusEl.style.background = sevBgs[sev];
-            statusEl.style.color = sevColors[sev];
-            statusEl.innerHTML = sevLabels[sev] + (aw.num_flights_today > 0 ? ' · ' + aw.num_flights_today + ' voo(s) hoje' : '');
-            
-            const bannerEl = document.getElementById('briefing-alerts-banner');
-            if (aw.global_alerts && aw.global_alerts.length > 0) {
-                let bHtml = '<div class="briefing-alert-banner">';
-                bHtml += '<div style="font-weight:700;font-size:0.85rem;color:#ef4444;margin-bottom:6px;">⚠ ALERTAS ATIVOS</div>';
-                aw.global_alerts.forEach(a => {
-                    const ac = sevColors[Math.min(a.severity, 3)];
-                    bHtml += '<div class="briefing-alert-item"><span class="briefing-alert-severity" style="color:' + ac + ';">●</span><span style="color:#e2e8f0;"><strong>' + a.icao + '</strong> (' + a.nome + '): ' + a.msg + '</span></div>';
-                });
-                bHtml += '</div>';
-                bannerEl.innerHTML = bHtml;
-                briefingExpanded = true;
-                document.getElementById('briefing-content').style.display = 'block';
-                document.getElementById('briefing-toggle').textContent = 'Recolher';
-            } else {
-                bannerEl.innerHTML = '';
-            }
-            
-            const grid = document.getElementById('briefing-grid');
-            let html = '';
-            
-            if (aw.metars && aw.metars.length > 0) {
-                aw.metars.forEach(m => {
-                    const sc = sevColors[Math.min(m.severity, 3)];
-                    const hasFlight = m.has_flights_today;
-                    const flightBadge = hasFlight ? '<span style="font-size:0.65rem;background:#1e40af;color:#fff;padding:2px 8px;border-radius:10px;margin-left:6px;">✈ Voo hoje</span>' : '';
-                    
-                    html += '<div class="briefing-metar-card" style="border-left-color:' + sc + ';">';
-                    html += '<div class="briefing-metar-header">';
-                    html += '<div><span class="briefing-metar-icao" style="color:' + sc + ';">' + m.icao + '</span><span style="color:#64748b;font-size:0.8rem;margin-left:6px;">' + m.nome + '</span>' + flightBadge + '</div>';
-                    if (m.fltcat) {
-                        html += '<span class="briefing-metar-fltcat" style="background:' + m.fltcat_color + ';color:#fff;">' + m.fltcat + '</span>';
-                    }
-                    html += '</div>';
-                    
-                    html += '<div class="briefing-metar-raw">' + m.raw + '</div>';
-                    
-                    html += '<div class="briefing-metar-details">';
-                    if (m.temp !== null) html += '<div class="briefing-metar-detail"><span class="briefing-metar-detail-label">🌡</span>' + m.temp + '°/' + m.dewp + '°C</div>';
-                    if (m.wdir !== null) html += '<div class="briefing-metar-detail"><span class="briefing-metar-detail-label">💨</span>' + m.wdir + '° ' + m.wspd + 'kt' + (m.wgst ? ' G' + m.wgst + 'kt' : '') + '</div>';
-                    if (m.visib !== null) html += '<div class="briefing-metar-detail"><span class="briefing-metar-detail-label">👁</span>' + m.visib + 'SM</div>';
-                    if (m.altim !== null) html += '<div class="briefing-metar-detail"><span class="briefing-metar-detail-label">📊</span>Q' + m.altim + '</div>';
-                    if (m.clouds && m.clouds.length > 0) {
-                        const clStr = m.clouds.map(c => c.cover + (c.base ? String(c.base).padStart(3,'0') : '')).join(' ');
-                        html += '<div class="briefing-metar-detail"><span class="briefing-metar-detail-label">☁</span>' + clStr + '</div>';
-                    }
-                    if (m.wxString) html += '<div class="briefing-metar-detail"><span class="briefing-metar-detail-label">🌧</span>' + m.wxString + '</div>';
-                    html += '</div>';
-                    
-                    if (m.alerts && m.alerts.length > 0) {
-                        html += '<div class="briefing-metar-alerts">';
-                        m.alerts.forEach(a => {
-                            const ac = sevColors[Math.min(a.severity, 3)];
-                            const bg = sevBgs[Math.min(a.severity, 3)];
-                            html += '<div class="briefing-metar-alert" style="background:' + bg + ';color:' + ac + ';">● ' + a.msg + '</div>';
-                        });
-                        html += '</div>';
-                    }
-                    html += '</div>';
-                });
-            }
-            
-            if (aw.tafs && aw.tafs.length > 0) {
-                html += '<div class="briefing-taf-section">';
-                html += '<div style="font-weight:600;font-size:0.85rem;color:#94a3b8;margin-bottom:8px;">📋 Previsão Terminal (TAF)</div>';
-                aw.tafs.forEach(t => {
-                    html += '<div class="briefing-taf-card">';
-                    html += '<div style="font-weight:700;color:#e2e8f0;margin-bottom:6px;">' + t.icao + '</div>';
-                    html += '<div class="briefing-taf-raw">' + t.raw + '</div>';
-                    html += '</div>';
-                });
-                html += '</div>';
-            }
-            
-            html += '<div class="briefing-links">';
-            html += '<a class="briefing-link" href="' + (aw.satellite_urls?.goes_realcada || '#') + '" target="_blank" rel="noopener">🛰️ Satélite REDEMET</a>';
-            html += '<a class="briefing-link" href="' + (aw.satellite_urls?.sigwx || '#') + '" target="_blank" rel="noopener">📊 Carta SIGWX</a>';
-            html += '<a class="briefing-link" href="' + (aw.satellite_urls?.radar || '#') + '" target="_blank" rel="noopener">📡 Radar Meteorológico</a>';
-            html += '<a class="briefing-link" href="' + (aw.satellite_urls?.cptec_satelite || '#') + '" target="_blank" rel="noopener">🌍 CPTEC/INPE Satélite</a>';
-            html += '<a class="briefing-link" href="https://redemet.decea.mil.br/?i=produtos&p=consulta-de-mensagens-opmet" target="_blank" rel="noopener">📝 METAR/TAF REDEMET</a>';
-            html += '</div>';
-            
-            grid.innerHTML = html;
         }
         
         const mesesNome = ['Janeiro', 'Fevereiro', 'Marco', 'Abril', 'Maio', 'Junho',
@@ -1687,20 +1489,6 @@ HTML_TEMPLATE = '''
                 const tiNf = tipoInfo(voo.tipo);
                 const badge = `<span class="nf-badge" style="background:${tiNf.cor};color:#fff;">${tiNf.badge}</span>`;
                 
-                const origW = getWeatherForLocation(voo.origem, voo._date);
-                const destW = getWeatherForLocation(voo.destino, voo._date);
-                let weatherLine = '';
-                if (origW) {
-                    const oc = SEVERITY_COLORS[origW.severity];
-                    weatherLine += `<div style="font-size:0.73rem;margin-top:4px;display:flex;gap:8px;align-items:center;">`;
-                    weatherLine += `<span class="weather-badge-inline sev-${origW.severity}" title="${origW.nome}: ${origW.desc}">${origW.icon} ${Math.round(origW.temp_max)}° 💧${origW.precip_prob}%</span>`;
-                    if (destW && destW.icao !== origW.icao) {
-                        weatherLine += `<span style="color:#475569;">→</span>`;
-                        weatherLine += `<span class="weather-badge-inline sev-${destW.severity}" title="${destW.nome}: ${destW.desc}">${destW.icon} ${Math.round(destW.temp_max)}° 💧${destW.precip_prob}%</span>`;
-                    }
-                    weatherLine += '</div>';
-                }
-                
                 return `
                 <div class="nf-card" style="border-left-color:${cor};" onclick="abrirModal('${voo._date}')">
                     <div class="nf-header">
@@ -1709,7 +1497,6 @@ HTML_TEMPLATE = '''
                     </div>
                     <div class="nf-route">${voo.origem_nome} → ${voo.destino_nome}</div>
                     <div class="nf-time">${hora} · ${voo.duracao_min}min · ${voo.passageiros} pax ${badge}</div>
-                    ${weatherLine}
                 </div>`;
             }).join('');
         }
@@ -1743,9 +1530,7 @@ HTML_TEMPLATE = '''
                 const classePast = isPast ? ' past' : '';
                 
                 html += `<div class="day-cell${classeHoje}${classePast}" onclick="abrirModal('${dataStr}')" style="position:relative;">`;
-                const wDay = getWeatherForDate(dataStr);
-                const wBadge = wDay ? `<span style="float:right;font-size:0.75rem;" title="${wDay.desc}: ${Math.round(wDay.temp_max)}°/${Math.round(wDay.temp_min)}°, 💧${wDay.precip_prob}%">${wDay.icon} <span style="font-size:0.68rem;color:${SEVERITY_COLORS[wDay.severity]};">${Math.round(wDay.temp_max)}°</span></span>` : '';
-                html += `<div class="day-number">${dia}${wBadge}</div>`;
+                html += `<div class="day-number">${dia}</div>`;
                 html += '<div class="flights-list">';
                 
                 const mergedDia = agruparPorMissao(voosDia);
@@ -1889,48 +1674,111 @@ HTML_TEMPLATE = '''
             titulo.textContent = `${diaSemana}, ${diaNum} de ${mesNome} de ${ano}`;
             subtitulo.textContent = `${voosReais.length} missao(oes) · 3 aeronaves`;
             
-            // Weather bar no modal
+            // ===== METEOROLOGIA COMPLETA NO MODAL =====
             const modalWeatherBar = document.getElementById('modal-weather-bar');
             if (modalWeatherBar) {
+                const sevC = ['#22c55e','#38bdf8','#f59e0b','#ef4444'];
+                const sevL = ['Ideal p/ voo','Boas condições','Atenção','Desfavorável'];
+                const sevBg = ['rgba(34,197,94,0.12)','rgba(59,130,246,0.12)','rgba(245,158,11,0.12)','rgba(239,68,68,0.12)'];
+                let mwHtml = '';
+                let hasContent = false;
+                
+                // --- Previsão do dia (Open-Meteo) ---
                 const mw = getWeatherForDate(dataStr);
                 if (mw) {
-                    const sc = SEVERITY_COLORS[mw.severity];
-                    const sl = SEVERITY_LABELS[mw.severity];
-                    let mwHtml = '<span class="modal-weather-label">TEMPO BASE:</span>';
-                    mwHtml += `<span class="modal-weather-item" style="color:${sc};">${mw.icon} ${mw.desc}</span>`;
-                    mwHtml += `<span class="modal-weather-item">🌡 ${Math.round(mw.temp_max)}° / ${Math.round(mw.temp_min)}°</span>`;
-                    mwHtml += `<span class="modal-weather-item">💧 ${mw.precip_prob || 0}%</span>`;
-                    mwHtml += `<span class="modal-weather-item">💨 ${Math.round(mw.wind_max || 0)} km/h</span>`;
-                    if (mw.wind_gusts) mwHtml += `<span class="modal-weather-item">Rajadas: ${Math.round(mw.wind_gusts)} km/h</span>`;
-                    mwHtml += `<span class="modal-weather-item" style="color:${sc};font-weight:600;margin-left:auto;">● ${sl}</span>`;
+                    hasContent = true;
+                    const sc = sevC[mw.severity];
+                    mwHtml += '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;width:100%;">';
+                    mwHtml += '<span style="font-weight:700;font-size:0.78rem;color:#64748b;">PREVISÃO:</span>';
+                    mwHtml += '<span style="color:' + sc + ';font-size:1.1rem;">' + mw.icon + '</span>';
+                    mwHtml += '<span style="color:' + sc + ';font-weight:600;">' + mw.desc + '</span>';
+                    mwHtml += '<span style="color:#e2e8f0;">🌡 ' + Math.round(mw.temp_max) + '°/' + Math.round(mw.temp_min) + '°</span>';
+                    mwHtml += '<span style="color:#e2e8f0;">💧 ' + (mw.precip_prob||0) + '%</span>';
+                    mwHtml += '<span style="color:#e2e8f0;">💨 ' + Math.round(mw.wind_max||0) + ' km/h</span>';
+                    if (mw.wind_gusts) mwHtml += '<span style="color:#e2e8f0;">Raj: ' + Math.round(mw.wind_gusts) + ' km/h</span>';
+                    mwHtml += '<span style="color:' + sc + ';font-weight:700;margin-left:auto;">● ' + sevL[mw.severity] + '</span>';
+                    mwHtml += '</div>';
                     
-                    // Destinos com condições adversas
-                    const destIcaos = new Set();
-                    voosReais.forEach(v => { if (v.destino) destIcaos.add(v.destino); });
-                    destIcaos.forEach(icao => {
+                    // Destinos com condições diferentes
+                    const dstIcaos = new Set();
+                    voosReais.forEach(v => { if (v.destino) dstIcaos.add(v.destino); });
+                    dstIcaos.forEach(icao => {
                         const dw = getWeatherForLocation(icao, dataStr);
                         if (dw && dw.severity >= 2 && dw.icao !== mw.icao) {
-                            mwHtml += `<div style="width:100%;margin-top:4px;"><span class="modal-weather-label">⚠ ${dw.nome}:</span> <span style="color:${SEVERITY_COLORS[dw.severity]};">${dw.icon} ${dw.desc} · ${Math.round(dw.temp_max)}° · 💧${dw.precip_prob}% · 💨${Math.round(dw.wind_max)} km/h</span></div>`;
+                            mwHtml += '<div style="width:100%;margin-top:4px;font-size:0.82rem;"><span style="color:#64748b;font-weight:600;">⚠ ' + dw.nome + ':</span> <span style="color:' + sevC[dw.severity] + ';">' + dw.icon + ' ' + dw.desc + ' · ' + Math.round(dw.temp_max) + '° · 💧' + dw.precip_prob + '% · 💨' + Math.round(dw.wind_max) + ' km/h</span></div>';
                         }
                     });
+                }
+                
+                // --- METAR / TAF / Alertas (apenas para HOJE) ---
+                const todayStr = new Date().toISOString().slice(0, 10);
+                if (dataStr === todayStr && avWeatherData) {
+                    const aw = avWeatherData;
+                    hasContent = true;
                     
-                    // METAR data for today
-                    const todayStr = new Date().toISOString().slice(0, 10);
-                    if (dataStr === todayStr && avWeatherData && avWeatherData.metars) {
-                        const relevantMetars = avWeatherData.metars.filter(m => m.has_flights_today);
-                        if (relevantMetars.length > 0) {
-                            mwHtml += '<div style="width:100%;margin-top:8px;padding-top:8px;border-top:1px solid #334155;">';
-                            mwHtml += '<span class="modal-weather-label">METAR AO VIVO:</span>';
-                            relevantMetars.forEach(m => {
-                                const mc = ['#22c55e','#38bdf8','#f59e0b','#ef4444'][Math.min(m.severity,3)];
-                                mwHtml += `<div style="width:100%;margin-top:4px;"><span style="color:${mc};font-weight:700;">${m.icao}</span> <span style="font-size:0.8rem;color:#94a3b8;">${m.nome}</span>`;
-                                if (m.fltcat) mwHtml += ` <span style="font-size:0.65rem;background:${m.fltcat_color};color:#fff;padding:1px 6px;border-radius:8px;">${m.fltcat}</span>`;
-                                mwHtml += `<div style="font-family:monospace;font-size:0.7rem;color:#64748b;margin-top:2px;">${m.raw}</div></div>`;
-                            });
-                            mwHtml += '</div>';
-                        }
+                    // Alertas globais
+                    if (aw.global_alerts && aw.global_alerts.length > 0) {
+                        mwHtml += '<div style="width:100%;margin-top:10px;padding:10px 14px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.25);border-radius:8px;">';
+                        mwHtml += '<div style="font-weight:700;font-size:0.82rem;color:#ef4444;margin-bottom:6px;">⚠ ALERTAS ATIVOS</div>';
+                        aw.global_alerts.forEach(a => {
+                            mwHtml += '<div style="font-size:0.8rem;padding:2px 0;color:#e2e8f0;">  <span style="color:' + sevC[Math.min(a.severity,3)] + ';">●</span> <strong>' + a.icao + '</strong> (' + a.nome + '): ' + a.msg + '</div>';
+                        });
+                        mwHtml += '</div>';
                     }
                     
+                    // METAR por aeroporto
+                    if (aw.metars && aw.metars.length > 0) {
+                        mwHtml += '<div style="width:100%;margin-top:10px;"><div style="font-weight:700;font-size:0.78rem;color:#64748b;margin-bottom:8px;">METAR AO VIVO</div>';
+                        mwHtml += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px;">';
+                        aw.metars.forEach(m => {
+                            const mc = sevC[Math.min(m.severity,3)];
+                            const mbg = sevBg[Math.min(m.severity,3)];
+                            const fb = m.has_flights_today ? ' <span style="font-size:0.6rem;background:#1e40af;color:#fff;padding:1px 6px;border-radius:8px;">✈ voo</span>' : '';
+                            mwHtml += '<div style="background:#0f172a;border-radius:8px;padding:10px 12px;border-left:3px solid ' + mc + ';">';
+                            mwHtml += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">';
+                            mwHtml += '<span style="font-weight:700;color:' + mc + ';">' + m.icao + '</span><span style="color:#64748b;font-size:0.75rem;">' + m.nome + '</span>' + fb;
+                            if (m.fltcat) mwHtml += ' <span style="font-size:0.6rem;background:' + m.fltcat_color + ';color:#fff;padding:1px 6px;border-radius:8px;">' + m.fltcat + '</span>';
+                            mwHtml += '</div>';
+                            mwHtml += '<div style="font-family:monospace;font-size:0.68rem;color:#94a3b8;background:rgba(0,0,0,0.3);padding:4px 8px;border-radius:4px;margin-bottom:6px;word-break:break-all;">' + m.raw + '</div>';
+                            mwHtml += '<div style="display:flex;flex-wrap:wrap;gap:8px;font-size:0.75rem;">';
+                            if (m.temp!==null) mwHtml += '<span>🌡 ' + m.temp + '°/' + m.dewp + '°C</span>';
+                            if (m.wdir!==null) mwHtml += '<span>💨 ' + m.wdir + '°/' + m.wspd + 'kt' + (m.wgst ? ' G' + m.wgst : '') + '</span>';
+                            if (m.visib!==null) mwHtml += '<span>👁 ' + m.visib + 'SM</span>';
+                            if (m.altim!==null) mwHtml += '<span>📊 Q' + m.altim + '</span>';
+                            if (m.wxString) mwHtml += '<span style="color:#f59e0b;">🌧 ' + m.wxString + '</span>';
+                            mwHtml += '</div>';
+                            if (m.alerts && m.alerts.length > 0) {
+                                m.alerts.forEach(a => {
+                                    mwHtml += '<div style="margin-top:4px;font-size:0.72rem;padding:2px 6px;border-radius:4px;background:' + sevBg[Math.min(a.severity,3)] + ';color:' + sevC[Math.min(a.severity,3)] + ';">● ' + a.msg + '</div>';
+                                });
+                            }
+                            mwHtml += '</div>';
+                        });
+                        mwHtml += '</div></div>';
+                    }
+                    
+                    // TAF
+                    if (aw.tafs && aw.tafs.length > 0) {
+                        mwHtml += '<div style="width:100%;margin-top:10px;"><div style="font-weight:700;font-size:0.78rem;color:#64748b;margin-bottom:6px;">📋 TAF (Previsão Terminal)</div>';
+                        aw.tafs.forEach(t => {
+                            mwHtml += '<div style="background:#0f172a;border-radius:8px;padding:8px 12px;margin-bottom:6px;">';
+                            mwHtml += '<span style="font-weight:700;color:#e2e8f0;">' + t.icao + '</span>';
+                            mwHtml += '<div style="font-family:monospace;font-size:0.68rem;color:#94a3b8;margin-top:4px;line-height:1.5;word-break:break-all;">' + t.raw + '</div>';
+                            mwHtml += '</div>';
+                        });
+                        mwHtml += '</div>';
+                    }
+                    
+                    // Links
+                    mwHtml += '<div style="width:100%;display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;">';
+                    mwHtml += '<a href="' + (aw.satellite_urls?.goes_realcada||'https://redemet.decea.mil.br') + '" target="_blank" rel="noopener" style="background:#334155;color:#e2e8f0;padding:6px 14px;border-radius:8px;text-decoration:none;font-size:0.78rem;font-weight:600;border:1px solid #475569;">🛰️ Satélite</a>';
+                    mwHtml += '<a href="' + (aw.satellite_urls?.sigwx||'https://redemet.decea.mil.br/sigwx/') + '" target="_blank" rel="noopener" style="background:#334155;color:#e2e8f0;padding:6px 14px;border-radius:8px;text-decoration:none;font-size:0.78rem;font-weight:600;border:1px solid #475569;">📊 SIGWX</a>';
+                    mwHtml += '<a href="' + (aw.satellite_urls?.radar||'#') + '" target="_blank" rel="noopener" style="background:#334155;color:#e2e8f0;padding:6px 14px;border-radius:8px;text-decoration:none;font-size:0.78rem;font-weight:600;border:1px solid #475569;">📡 Radar</a>';
+                    mwHtml += '<a href="' + (aw.satellite_urls?.cptec_satelite||'https://satelite.cptec.inpe.br/home/') + '" target="_blank" rel="noopener" style="background:#334155;color:#e2e8f0;padding:6px 14px;border-radius:8px;text-decoration:none;font-size:0.78rem;font-weight:600;border:1px solid #475569;">🌍 CPTEC</a>';
+                    mwHtml += '</div>';
+                }
+                
+                if (hasContent) {
                     modalWeatherBar.innerHTML = mwHtml;
                     modalWeatherBar.style.display = 'flex';
                 } else {
