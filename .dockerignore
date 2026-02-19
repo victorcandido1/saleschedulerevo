@@ -1,0 +1,10 @@
+.git
+.specstory
+.cursorindexingignore
+.dockerignore
+.gitignore
+*.md
+start.ps1
+__pycache__
+*.pyc
+.env
