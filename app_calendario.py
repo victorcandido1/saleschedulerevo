@@ -190,7 +190,19 @@ def conectar_salesforce():
                 "Sem SF_SECURITY_TOKEN e sem Connected App; login Salesforce pode falhar."
             )
 
-        sf = Salesforce(**sf_kwargs)
+        try:
+            sf = Salesforce(**sf_kwargs)
+        except TypeError as te:
+            if ('consumer_key' in sf_kwargs or 'consumer_secret' in sf_kwargs) and 'consumer_' in str(te):
+                logging.warning(
+                    "Versão da biblioteca sem suporte a consumer_key/consumer_secret; "
+                    "seguindo com autenticação padrão."
+                )
+                sf_kwargs.pop('consumer_key', None)
+                sf_kwargs.pop('consumer_secret', None)
+                sf = Salesforce(**sf_kwargs)
+            else:
+                raise
         logging.info("Conectado ao Salesforce!")
         return sf
     except Exception as e:
