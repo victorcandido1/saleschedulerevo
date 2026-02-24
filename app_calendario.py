@@ -153,12 +153,44 @@ def calcular_tempo_retorno(destino_icao, prefixo):
 
 def conectar_salesforce():
     try:
-        sf = Salesforce(
-            username=os.environ.get('SF_USERNAME'),
-            password=os.environ.get('SF_PASSWORD'),
-            security_token=os.environ.get('SF_SECURITY_TOKEN'),
-            domain=os.environ.get('SF_DOMAIN', 'login')
-        )
+        username = os.environ.get('SF_USERNAME')
+        password = os.environ.get('SF_PASSWORD')
+        security_token = os.environ.get('SF_SECURITY_TOKEN')
+        domain = os.environ.get('SF_DOMAIN', 'login')
+        consumer_key = os.environ.get('SF_CONSUMER_KEY')
+        consumer_secret = os.environ.get('SF_CONSUMER_SECRET')
+
+        missing = [k for k, v in (
+            ('SF_USERNAME', username),
+            ('SF_PASSWORD', password),
+        ) if not v]
+        if missing:
+            logging.error(f"Credenciais Salesforce ausentes: {', '.join(missing)}")
+            return None
+
+        sf_kwargs = {
+            'username': username,
+            'password': password,
+            'domain': domain
+        }
+        if security_token:
+            sf_kwargs['security_token'] = security_token
+
+        if consumer_key and consumer_secret:
+            # Suporta login via Connected App quando exigido pela org.
+            sf_kwargs['consumer_key'] = consumer_key
+            sf_kwargs['consumer_secret'] = consumer_secret
+        elif consumer_key or consumer_secret:
+            logging.warning(
+                "SF_CONSUMER_KEY/SF_CONSUMER_SECRET incompletos; usando autenticação padrão."
+            )
+
+        if ('security_token' not in sf_kwargs) and ('consumer_key' not in sf_kwargs):
+            logging.warning(
+                "Sem SF_SECURITY_TOKEN e sem Connected App; login Salesforce pode falhar."
+            )
+
+        sf = Salesforce(**sf_kwargs)
         logging.info("Conectado ao Salesforce!")
         return sf
     except Exception as e:
