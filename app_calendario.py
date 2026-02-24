@@ -29,7 +29,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # ===== CACHE =====
 _cache = {'data': None, 'stats': None, 'timestamp': 0, 'raw_json': None}
 _cache_lock = threading.Lock()
-CACHE_TTL = 150  # 2 minutos e meio
+CACHE_TTL = 900  # 15 minutos
+SALESFORCE_POLL_INTERVAL = 900  # 15 minutos
+_salesforce_poll_thread = None
+_salesforce_poll_lock = threading.Lock()
 
 # ===== WEATHER CACHE =====
 _weather_cache = {'data': None, 'timestamp': 0}
@@ -2322,11 +2325,11 @@ def _merge_voos_e_stats(vpd_t, st_t, vpd_v, st_v):
     return vpd_t, st_t
 
 
-def _get_cached_data():
-    """Busca dados com cache de 2 minutos. Prioriza Trecho__c (dados reais), fallback em Voo__c."""
+def _get_cached_data(force_refresh=False):
+    """Busca dados com cache de 15 minutos. Prioriza Trecho__c (dados reais), fallback em Voo__c."""
     now = time.time()
     with _cache_lock:
-        if _cache['data'] and (now - _cache['timestamp']) < CACHE_TTL:
+        if (not force_refresh) and _cache['data'] and (now - _cache['timestamp']) < CACHE_TTL:
             return _cache['data'], _cache['stats'], _cache['raw_json']
     
     sf = conectar_salesforce()
@@ -2352,6 +2355,33 @@ def _get_cached_data():
         _cache['timestamp'] = time.time()
     
     return voos_por_dia, stats, voos_json
+
+
+def _salesforce_polling_loop():
+    """Atualiza cache do Salesforce em background, em intervalo fixo."""
+    while True:
+        try:
+            _get_cached_data(force_refresh=True)
+        except Exception as e:
+            logging.error(f"Erro no polling de Salesforce: {e}")
+        time.sleep(SALESFORCE_POLL_INTERVAL)
+
+
+def _start_salesforce_polling():
+    """Garante que apenas uma thread de polling esteja ativa por instância."""
+    global _salesforce_poll_thread
+    with _salesforce_poll_lock:
+        if _salesforce_poll_thread and _salesforce_poll_thread.is_alive():
+            return
+        _salesforce_poll_thread = threading.Thread(
+            target=_salesforce_polling_loop,
+            name='salesforce-poller',
+            daemon=True
+        )
+        _salesforce_poll_thread.start()
+        logging.info(
+            f"Polling Salesforce iniciado (intervalo: {SALESFORCE_POLL_INTERVAL // 60} minutos)"
+        )
 
 
 # ===== AVIATION WEATHER (METAR / TAF / Alertas / Satélite / SIGWX) =====
@@ -2770,5 +2800,6 @@ def health():
 
 
 if __name__ == '__main__':
+    _start_salesforce_polling()
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port, debug=False)
