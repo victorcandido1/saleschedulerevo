@@ -307,7 +307,10 @@ def processar_trechos(trechos):
         dt_voo_str = vr.get('DataHoraVoo__c')
         try:
             dt_voo = datetime.fromisoformat(dt_voo_str.replace('Z', '+00:00')) if dt_voo_str else None
-            dt_voo_local = dt_voo - timedelta(hours=3) if (dt_voo and dt_voo.tzinfo) else dt_voo
+            if dt_voo and dt_voo.tzinfo:
+                dt_voo_local = (dt_voo - timedelta(hours=3)).replace(tzinfo=None)
+            else:
+                dt_voo_local = dt_voo
         except Exception:
             dt_voo_local = None
 
@@ -324,7 +327,8 @@ def processar_trechos(trechos):
                 if val:
                     try:
                         dep_dt = datetime.fromisoformat(val.replace('Z', '+00:00'))
-                        dep_dt = dep_dt - timedelta(hours=3) if dep_dt.tzinfo else dep_dt
+                        if dep_dt.tzinfo:
+                            dep_dt = (dep_dt - timedelta(hours=3)).replace(tzinfo=None)
                         break
                     except Exception:
                         pass
@@ -339,7 +343,8 @@ def processar_trechos(trechos):
                 if val:
                     try:
                         arr_dt = datetime.fromisoformat(val.replace('Z', '+00:00'))
-                        arr_dt = arr_dt - timedelta(hours=3) if arr_dt.tzinfo else arr_dt
+                        if arr_dt.tzinfo:
+                            arr_dt = (arr_dt - timedelta(hours=3)).replace(tzinfo=None)
                         break
                     except Exception:
                         pass
@@ -447,7 +452,7 @@ def processar_voos(voos, voo_ids_com_trechos=None, retornos_cadastrados_in=None)
             continue
         try:
             dt = datetime.fromisoformat(dt_s.replace('Z', '+00:00'))
-            dt_local = dt - timedelta(hours=3) if dt.tzinfo else dt
+            dt_local = (dt - timedelta(hours=3)).replace(tzinfo=None) if dt.tzinfo else dt
         except:
             continue
         rota = v.get('RotaAbreviada__c') or v.get('Rota__c') or ''
@@ -468,7 +473,7 @@ def processar_voos(voos, voo_ids_com_trechos=None, retornos_cadastrados_in=None)
             
         try:
             dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
-            dt_local = dt - timedelta(hours=3) if dt.tzinfo else dt
+            dt_local = (dt - timedelta(hours=3)).replace(tzinfo=None) if dt.tzinfo else dt
         except:
             continue
         
