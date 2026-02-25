@@ -368,6 +368,7 @@ def processar_trechos(trechos):
 
             voo_info = {
                 'id': t.get('Id'),
+                'voo_id': voo_id,
                 'name': vr.get('Name', ''),
                 'prefixo': prefixo,
                 'origem': origem,
@@ -503,6 +504,7 @@ def processar_voos(voos, voo_ids_com_trechos=None, retornos_cadastrados_in=None)
                 rec = receita_total if idx == 0 else 0
                 voo_info = {
                     'id': voo.get('Id'),
+                    'voo_id': voo.get('Id'),
                     'name': voo.get('Name', ''),
                     'prefixo': prefixo,
                     'origem': origem,
@@ -561,6 +563,7 @@ def processar_voos(voos, voo_ids_com_trechos=None, retornos_cadastrados_in=None)
             data_str = dep_time.strftime('%Y-%m-%d')
             voo_info = {
                 'id': voo.get('Id'),
+                'voo_id': voo.get('Id'),
                 'name': voo.get('Name', ''),
                 'prefixo': prefixo,
                 'origem': origem,
@@ -693,15 +696,15 @@ HTML_TEMPLATE = '''
         @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
         .next-flights-grid { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 5px; }
         .nf-card {
-            background: #0f172a; border-radius: 10px; padding: 14px; min-width: 220px; flex-shrink: 0;
-            border-left: 3px solid #475569; transition: all 0.2s; cursor: pointer;
+            background: #0f172a; border-radius: 10px; padding: 16px; min-width: 220px; flex-shrink: 0;
+            border-left: 4px solid #475569; transition: all 0.2s; cursor: pointer;
         }
         .nf-card:hover { background: #1e3a5f; transform: translateY(-2px); }
-        .nf-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-        .nf-date { font-size: 0.75rem; color: #64748b; }
-        .nf-prefix { font-weight: 700; font-size: 0.9rem; }
-        .nf-route { font-size: 0.85rem; color: #e2e8f0; margin-bottom: 4px; }
-        .nf-time { font-size: 0.8rem; color: #94a3b8; }
+        .nf-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .nf-date { font-size: 0.8rem; font-weight: 600; color: #64748b; }
+        .nf-prefix { font-weight: 700; font-size: 1rem; letter-spacing: 0.02em; }
+        .nf-route { font-size: 0.9rem; font-weight: 500; color: #e2e8f0; margin-bottom: 6px; line-height: 1.4; }
+        .nf-time { font-size: 0.85rem; color: #94a3b8; font-variant-numeric: tabular-nums; }
         .nf-badge { font-size: 0.65rem; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
         .nf-badge.shuttle { background: #7c3aed; color: white; }
         .nf-badge.charter { background: #0369a1; color: white; }
@@ -754,19 +757,19 @@ HTML_TEMPLATE = '''
         .day-number { font-size: 1.1rem; font-weight: 600; color: #64748b; margin-bottom: 8px; }
         .day-cell.today .day-number { color: #F59E0B; }
         
-        .flights-list { display: flex; flex-direction: column; gap: 4px; }
+        .flights-list { display: flex; flex-direction: column; gap: 6px; }
         
         .flight-item {
-            display: flex; align-items: center; gap: 6px; padding: 4px 6px;
-            border-radius: 4px; font-size: 0.75rem;
-            transition: all 0.15s; background: rgba(255,255,255,0.03);
+            display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+            border-radius: 6px; font-size: 0.8rem; line-height: 1.35;
+            transition: all 0.15s; background: rgba(255,255,255,0.04);
         }
-        .flight-item:hover { background: rgba(255,255,255,0.1); }
+        .flight-item:hover { background: rgba(255,255,255,0.12); }
         .flight-item { position: relative; }
         .flight-tooltip {
             display: none; position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
-            background: #1e293b; border: 1px solid #475569; border-radius: 8px; padding: 8px 12px;
-            font-size: 0.75rem; color: #e2e8f0; white-space: nowrap; z-index: 100;
+            background: #1e293b; border: 1px solid #475569; border-radius: 8px; padding: 10px 14px;
+            font-size: 0.8rem; line-height: 1.5; color: #e2e8f0; white-space: nowrap; z-index: 100;
             box-shadow: 0 4px 12px rgba(0,0,0,0.5); pointer-events: none;
         }
         .flight-item:hover .flight-tooltip { display: block; }
@@ -778,9 +781,9 @@ HTML_TEMPLATE = '''
         }
         .day-cell:hover .day-tooltip { display: block; }
         
-        .flight-icon { width: 18px; height: 18px; border-radius: 3px; flex-shrink: 0; }
-        .flight-time { color: #94a3b8; font-weight: 500; min-width: 38px; }
-        .flight-route { color: #e2e8f0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .flight-icon { width: 20px; height: 20px; border-radius: 4px; flex-shrink: 0; }
+        .flight-time { color: #38bdf8; font-weight: 700; min-width: 42px; font-variant-numeric: tabular-nums; }
+        .flight-route { color: #e2e8f0; font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         
         /* Dias passados - menor destaque mas legivel */
         .day-cell.past .flight-item { opacity: 0.6; }
@@ -863,27 +866,27 @@ HTML_TEMPLATE = '''
         
         .gantt-bar {
             position: absolute; top: 4px; height: calc(100% - 8px);
-            border-radius: 5px; display: flex; flex-direction: row;
-            align-items: center; justify-content: center; padding: 2px 6px; gap: 4px;
-            font-size: 0.72rem; font-weight: 600; z-index: 2; overflow: hidden;
+            border-radius: 6px; display: flex; flex-direction: row;
+            align-items: center; justify-content: center; padding: 4px 8px; gap: 6px;
+            font-size: 0.78rem; font-weight: 600; z-index: 2; overflow: hidden;
             box-shadow: 0 2px 8px rgba(0,0,0,0.35); text-align: center;
-            white-space: nowrap; text-overflow: ellipsis; cursor: pointer;
+            white-space: nowrap; text-overflow: ellipsis; cursor: pointer; letter-spacing: 0.02em;
         }
         .gantt-bar.voo { color: white; z-index: 3; }
         .gantt-bar.retorno { background: #eab308; color: #000; z-index: 2; }
-        .gantt-bar-route { font-weight: 700; overflow: hidden; text-overflow: ellipsis; }
-        .gantt-bar-pax { font-size: 0.65rem; opacity: 0.95; }
+        .gantt-bar-route { font-weight: 700; overflow: hidden; text-overflow: ellipsis; font-size: 0.82rem; }
+        .gantt-bar-pax { font-size: 0.7rem; opacity: 0.95; font-variant-numeric: tabular-nums; }
         .gantt-bar-popup {
             display: none; position: fixed; z-index: 9999;
-            min-width: 300px; max-width: 380px; padding: 18px 20px;
+            min-width: 320px; max-width: 400px; padding: 20px 24px;
             background: #0f172a; border: 2px solid #475569;
             border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.7);
-            font-size: 1rem; line-height: 1.65; color: #e2e8f0;
+            font-size: 1rem; line-height: 1.7; color: #e2e8f0;
             pointer-events: none; white-space: normal; text-align: left;
         }
         /* Popup visibilidade controlada por JS */
-        .gantt-bar-popup-title { font-size: 1.15rem; font-weight: 700; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 2px solid #334155; }
-        .gantt-bar-popup-row { margin-bottom: 8px; display: flex; gap: 10px; font-size: 0.95rem; }
+        .gantt-bar-popup-title { font-size: 1.2rem; font-weight: 700; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 2px solid #334155; letter-spacing: 0.02em; }
+        .gantt-bar-popup-row { margin-bottom: 10px; display: flex; gap: 12px; font-size: 1rem; align-items: baseline; }
         .gantt-bar-popup-label { color: #94a3b8; min-width: 95px; flex-shrink: 0; }
         .gantt-bar-popup-value { font-weight: 600; }
         .gantt-bar-popup-rota { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #334155; font-size: 0.9rem; }
@@ -1728,7 +1731,7 @@ HTML_TEMPLATE = '''
             const retornos = [];
             voosDia.forEach(v => {
                 if (v.is_retorno) { retornos.push(v); return; }
-                const chave = v.name || v.inicio;
+                const chave = v.voo_id || (v.name && v.name.trim() ? v.name : null) || (v.prefixo + '_' + v.origem + '_' + v.inicio);
                 if (!grupos[chave]) grupos[chave] = [];
                 grupos[chave].push(v);
             });
@@ -2075,12 +2078,14 @@ HTML_TEMPLATE = '''
             return [offsetLatLng(a[0], a[1], dx, dy), offsetLatLng(b[0], b[1], dx, dy)];
         }
         
-        function createArrowIcon(color, bearingDeg) {
+        function createArrowIcon(color, bearingDeg, size) {
+            size = size || 20;
+            const half = size / 2;
             return L.divIcon({
-                html: `<div style="transform:rotate(${bearingDeg}deg);line-height:0"><svg width="14" height="14" viewBox="0 0 16 16"><polygon fill="${color}" stroke="#0f172a" stroke-width="1" points="2,3 16,8 2,13 6,8"/></svg></div>`,
+                html: `<div style="transform:rotate(${bearingDeg}deg);line-height:0;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.8))"><svg width="${size}" height="${size}" viewBox="0 0 24 24"><polygon fill="${color}" stroke="#fff" stroke-width="2" points="2,4 22,12 2,20 8,12"/></svg></div>`,
                 className: 'arrow-icon',
-                iconSize: [14, 14],
-                iconAnchor: [7, 7]
+                iconSize: [size, size],
+                iconAnchor: [half, half]
             });
         }
         
@@ -2129,7 +2134,7 @@ HTML_TEMPLATE = '''
                 const corAeronave = helicopteros[voo.prefixo]?.cor || '#666';
                 const cor = isRetorno ? '#eab308' : ti.cor;
                 const dashArray = isRetorno ? '8, 8' : null;
-                const line = L.polyline([a, b], { color: cor, weight: 4, opacity: 0.9, dashArray: dashArray });
+                const line = L.polyline([a, b], { color: cor, weight: 5, opacity: 0.95, dashArray: dashArray });
                 line.addTo(flightMap);
                 mapLayers.push(line);
                 
@@ -2140,10 +2145,15 @@ HTML_TEMPLATE = '''
                     : `${voo.prefixo}: ${voo.origem_nome} → ${voo.destino_nome} (${voo.passageiros} pax) · ${ti.badge}`;
                 line.bindTooltip(tooltip, { permanent: false, direction: 'top' });
                 
-                const bearing = Math.atan2(b[1] - a[1], (b[0] - a[0]) * Math.cos(b[0] * Math.PI / 180)) * 180 / Math.PI;
-                const arrowIcon = createArrowIcon(cor, bearing);
-                const arrow = L.marker(b, { icon: arrowIcon }).addTo(flightMap);
-                mapLayers.push(arrow);
+                const midLat = (a[0] + b[0]) / 2;
+                const midLon = (a[1] + b[1]) / 2;
+                const bearing = Math.atan2(b[1] - a[1], (b[0] - a[0]) * Math.cos(midLat * Math.PI / 180)) * 180 / Math.PI;
+                const arrowIconEnd = createArrowIcon(cor, bearing, 24);
+                const arrowIconMid = createArrowIcon(cor, bearing, 18);
+                const arrowEnd = L.marker([b[0], b[1]], { icon: arrowIconEnd }).addTo(flightMap);
+                const arrowMid = L.marker([midLat, midLon], { icon: arrowIconMid }).addTo(flightMap);
+                mapLayers.push(arrowEnd);
+                mapLayers.push(arrowMid);
             });
             
             // Legenda do mapa
@@ -2236,7 +2246,9 @@ HTML_TEMPLATE = '''
             const el = document.getElementById('flight-map');
             if (!el) return;
             flightMap = L.map('flight-map', { attributionControl: false }).setView([-23.55, -46.64], 9);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                subdomains: 'abcd',
                 maxZoom: 19
             }).addTo(flightMap);
             mapLayers = [];
@@ -2281,6 +2293,7 @@ def _serialize_voos(voos_por_dia):
         for v in lista:
             voo_dict = {
                 'prefixo': v['prefixo'],
+                'voo_id': v.get('voo_id') or v.get('id'),
                 'origem': v['origem'],
                 'destino': v['destino'],
                 'origem_nome': v['origem_nome'],
